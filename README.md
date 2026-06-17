@@ -13,4 +13,4 @@ Key files
 
 If you want me to place a built .exe inside the repo so a Windows user can directly download it, upload the exe (or give me a public link) and I will add it into the `binaries/windows/` folder on a separate branch named `binaries` to avoid cluttering `main`.
 
-If you'd prefer I keep iterating on the GitHub Actions build until it works automatically, I can continue debugging the CI logs — but building locally on Windows is usually the fastest route.
+If you'd prefer I keep iterating on the GitHub Actions build until it works automatically, I can continue debugging the CI logs — but building locally on Windows is usually the fastest route.# kintana2
