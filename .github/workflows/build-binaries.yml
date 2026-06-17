@@ -29,18 +29,46 @@ jobs:
           pip --version
           pip install --no-cache-dir pyautogui pynput pymsgbox pyscreeze pygetwindow mouseinfo pyperclip pyinstaller==5.11
           pip list
+      - name: Check tkinter availability and prepare Tcl/Tk
+        shell: powershell
+        run: |
+          Write-Host "Checking tkinter availability (will print traceback but not fail)..."
+          python - <<'PY'
+import sys, os
+try:
+    import tkinter
+    print('TKINTER OK: TkVersion=', getattr(tkinter, 'TkVersion', None), 'TclVersion=', getattr(tkinter, 'TclVersion', None))
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    print('TKINTER_IMPORT_FAILED')
+print('TCL base path expected:', os.path.join(sys.base_prefix, 'tcl'))
+PY
+
       - name: Build with PyInstaller (Windows GUI)
         shell: powershell
         run: |
-          # Determine Python base and tcl/dll directories for this runner
+          # Copy Tcl/Tk and DLLs into workspace so PyInstaller can include them reliably
           $pyBase = (python -c "import sys; print(sys.base_prefix)").Trim()
-          Write-Host "PYTHON BASE: $pyBase"
-          $tclDir = (python -c "import sys,os,tkinter; print(os.path.join(sys.base_prefix, 'tcl'))").Trim()
-          Write-Host "TCL DIR: $tclDir"
+          $tclDir = (python -c "import sys,os; print(os.path.join(sys.base_prefix, 'tcl'))").Trim()
           $dllDir = Join-Path $pyBase 'DLLs'
+          Write-Host "PYTHON BASE: $pyBase"
+          Write-Host "TCL DIR: $tclDir"
           Write-Host "DLL DIR: $dllDir"
-          # Build the GUI executable and include tcl and DLLs
-          python -m PyInstaller --clean --log-level=DEBUG --noconfirm --onefile --windowed --add-data "$tclDir;./tcl" --add-data "$dllDir;./DLLs" --hidden-import tkinter --hidden-import tkinter.font --hidden-import tkinter.ttk --name autoclicker autoclick_gui.py 2>&1 | Tee-Object -FilePath pyinstaller.log
+          if (Test-Path .\tcl) { Remove-Item -Recurse -Force .\tcl }
+          if (Test-Path .\DLLs) { Remove-Item -Recurse -Force .\DLLs }
+          if (Test-Path $tclDir) { Copy-Item -Path (Join-Path $tclDir '*') -Destination .\tcl -Recurse -Force }
+          if (Test-Path $dllDir) { Copy-Item -Path (Join-Path $dllDir '*') -Destination .\DLLs -Recurse -Force }
+          $localTcl = (Resolve-Path .\tcl).Path
+          $localDlls = (Resolve-Path .\DLLs).Path
+          Write-Host "Copied tcl to: $localTcl"
+          Write-Host "Copied DLLs to: $localDlls"
+          # Ensure runtime can find Tk DLLs
+          $env:PATH = "$localDlls;$env:PATH"
+          $env:TCL_LIBRARY = $localTcl
+          $env:TK_LIBRARY = $localTcl
+          # Run PyInstaller and capture verbose log
+          python -m PyInstaller --clean --log-level=DEBUG --noconfirm --onedir --windowed --add-data "$localTcl;./tcl" --add-data "$localDlls;./DLLs" --hidden-import tkinter --hidden-import tkinter.font --hidden-import tkinter.ttk --name autoclicker autoclick_gui.py 2>&1 | Tee-Object -FilePath pyinstaller.log
           if (Test-Path dist) { dir dist\* } else { Write-Host "dist/ not found" }
       - name: Prepare artifact
         if: always()
