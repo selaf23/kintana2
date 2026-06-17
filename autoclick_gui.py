@@ -135,20 +135,129 @@ def locate_all(
 ):
     """Localiza coincidencias en pantalla.
 
-    Si simulate=True no devuelve coincidencias, salvo demo=True donde devuelve
-    una coincidencia sintética para demostración.
+    Estrategia:
+    - Si `simulate` -> no coincidencias (salvo demo)
+    - Primero intenta `pyautogui.locateAllOnScreen` (rápido)
+    - Si no hay resultados y OpenCV está disponible, realiza un matching multi-escala
+      con `cv2.matchTemplate` (más robusto en casos de escala/dpi distinta).
     """
     if simulate:
         if demo:
             return [(100, 100, 20, 20)]
         return []
 
+    # Intento rápido con pyautogui (usa pyscreeze internamente)
     try:
         if HAVE_CV2:
-            return list(pyautogui.locateAllOnScreen(img_path, confidence=confidence))
-        return list(pyautogui.locateAllOnScreen(img_path))
+            try:
+                return list(
+                    pyautogui.locateAllOnScreen(img_path, confidence=confidence)
+                )
+            except Exception:
+                # caemos al fallback con OpenCV
+                pass
+        else:
+            try:
+                return list(pyautogui.locateAllOnScreen(img_path))
+            except Exception:
+                return []
+    except Exception:
+        # seguimos al fallback
+        pass
+
+    # Fallback: matching multi-escala con OpenCV (más lento, pero más robusto)
+    if not HAVE_CV2:
+        return []
+
+    try:
+        import cv2
+        import numpy as np
+
+        # Leer plantilla
+        tpl = cv2.imdecode(np.fromfile(img_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if tpl is None:
+            tpl = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        if tpl is None:
+            print(f"[AVISO] No se pudo leer la imagen objetivo: {img_path}")
+            return []
+
+        # Captura de pantalla
+        screen_pil = pyautogui.screenshot()
+        screen = cv2.cvtColor(np.array(screen_pil), cv2.COLOR_RGB2BGR)
+        screen_h, screen_w = screen.shape[:2]
+
+        tpl_color = tpl
+        # Si la plantilla tiene canal alpha, ignoramos el alpha para matching simple
+        if tpl_color.ndim == 3 and tpl_color.shape[2] == 4:
+            tpl_color = cv2.cvtColor(tpl_color, cv2.COLOR_BGRA2BGR)
+
+        tpl_gray = cv2.cvtColor(tpl_color, cv2.COLOR_BGR2GRAY)
+        screen_gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+
+        th, tw = tpl_gray.shape[:2]
+        boxes = []
+        scores = []
+
+        # Escalas a probar alrededor de 1.0 — ajustar si necesitas buscar mayor rango
+        scales = np.linspace(0.7, 1.3, 7)
+
+        for scale in scales:
+            nw = int(tw * scale)
+            nh = int(th * scale)
+            if nw < 8 or nh < 8 or nw > screen_w or nh > screen_h:
+                continue
+            try:
+                tpl_resized = cv2.resize(
+                    tpl_gray,
+                    (nw, nh),
+                    interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR,
+                )
+            except Exception:
+                continue
+
+            res = cv2.matchTemplate(screen_gray, tpl_resized, cv2.TM_CCOEFF_NORMED)
+            loc = np.where(res >= float(confidence))
+            for py_y, px_x in zip(*loc):
+                score = float(res[py_y, px_x])
+                boxes.append((int(px_x), int(py_y), nw, nh))
+                scores.append(score)
+
+        # No detecciones
+        if not boxes:
+            return []
+
+        # Non-maximum suppression para fusionar detecciones solapadas
+        def _nms(boxes, scores, iou_thresh=0.3):
+            x1 = np.array([b[0] for b in boxes], dtype=float)
+            y1 = np.array([b[1] for b in boxes], dtype=float)
+            x2 = x1 + np.array([b[2] for b in boxes], dtype=float)
+            y2 = y1 + np.array([b[3] for b in boxes], dtype=float)
+
+            areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+            order = np.argsort(scores)[::-1]
+            keep = []
+            while order.size > 0:
+                i = order[0]
+                keep.append(i)
+                xx1 = np.maximum(x1[i], x1[order[1:]])
+                yy1 = np.maximum(y1[i], y1[order[1:]])
+                xx2 = np.minimum(x2[i], x2[order[1:]])
+                yy2 = np.minimum(y2[i], y2[order[1:]])
+
+                w = np.maximum(0.0, xx2 - xx1 + 1)
+                h = np.maximum(0.0, yy2 - yy1 + 1)
+                inter = w * h
+                ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+                inds = np.where(ovr <= iou_thresh)[0]
+                order = order[inds + 1]
+            return keep
+
+        keep_idx = _nms(boxes, np.array(scores), iou_thresh=0.3)
+        filtered = [boxes[i] for i in keep_idx]
+        return filtered
     except Exception as e:
-        print(f"[AVISO] locate_all falló para {img_path}: {e}")
+        print(f"[AVISO] Fallback OpenCV locate falló para {img_path}: {e}")
         return []
 
 
@@ -242,7 +351,26 @@ class Scanner:
                     )
                 else:
                     try:
-                        pyautogui.click(tx, ty, button=button)
+                        # Mover cursor primero para mayor fiabilidad
+                        try:
+                            pyautogui.moveTo(tx, ty, duration=0.05)
+                            time.sleep(0.02)
+                        except Exception:
+                            pass
+                        # Click real
+                        pyautogui.mouseDown(button=button)
+                        pyautogui.mouseUp(button=button)
+
+                        # Verificar posición después del movimiento
+                        try:
+                            p_after = pyautogui.position()
+                            if abs(p_after.x - tx) > 8 or abs(p_after.y - ty) > 8:
+                                self.log(
+                                    f"[WARN] El cursor no quedó en la posición esperada: ({p_after.x},{p_after.y}) vs ({tx},{ty})"
+                                )
+                        except Exception:
+                            pass
+
                         self.log(
                             f"[CLIC] {basename} en ({tx},{ty}) (boton={button}, conf={confidence})"
                         )
