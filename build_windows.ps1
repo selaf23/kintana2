@@ -17,7 +17,7 @@ pip install -r requirements.txt
 pip install pyinstaller==5.11
 
 # Construir el exe (incluye targets/ como datos) y guardar log
-pyinstaller --clean --noconfirm --onefile --add-data "targets;targets" --name autoclicker autoclick_gui.py 2>&1 | Tee-Object -FilePath pyinstaller-windows.log
+pyinstaller --clean --noconfirm --onefile --add-data "targets;targets" --hidden-import positions_clicker --name autoclicker autoclick_gui.py 2>&1 | Tee-Object -FilePath pyinstaller-windows.log
 
 # Preparar carpeta artifact y mover el exe si existe
 if (!(Test-Path artifact)) { New-Item -ItemType Directory artifact | Out-Null }
