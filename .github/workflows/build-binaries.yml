@@ -25,16 +25,20 @@ jobs:
           pip list
       - name: Build with PyInstaller (Windows GUI)
         run: |
-          python -m PyInstaller --clean --log-level=DEBUG --noconfirm --onefile --add-data "targets;targets" --hidden-import tkinter --name autoclicker autoclick_gui.py
+          # Save PyInstaller output to a log file so we can upload it even if build fails
+          python -m PyInstaller --clean --log-level=DEBUG --noconfirm --onefile --add-data "targets;targets" --hidden-import tkinter --name autoclicker autoclick_gui.py 2>&1 | Tee-Object -FilePath pyinstaller.log
           echo "dist contents:"
-          dir dist\* || true
+          if (Test-Path dist) { dir dist\* } else { echo "dist/ not found" }
       - name: Prepare artifact
+        if: always()
         shell: powershell
         run: |
           New-Item -ItemType Directory artifact -Force | Out-Null
-          Copy-Item -Path dist\autoclicker.exe -Destination artifact\autoclicker-windows.exe -Force
+          if (Test-Path dist\autoclicker.exe) { Copy-Item -Path dist\autoclicker.exe -Destination artifact\autoclicker-windows.exe -Force }
+          if (Test-Path pyinstaller.log) { Copy-Item -Path pyinstaller.log -Destination artifact\pyinstaller-windows.log -Force }
           if (Test-Path targets) { Copy-Item -Path targets -Destination artifact\targets -Recurse -Force }
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: autoclicker-windows
@@ -60,16 +64,19 @@ jobs:
           pip list || true
       - name: Build with PyInstaller (macOS - headless script)
         run: |
-          # Building the GUI on macOS runners can fail due to missing Tk; build the headless script instead
-          python3 -m PyInstaller --clean --log-level=DEBUG --noconfirm --onefile --add-data "targets:targets" --name autoclicker autoclick_image.py
+          # Save PyInstaller output to a log file so we can upload it even if build fails
+          python3 -m PyInstaller --clean --log-level=DEBUG --noconfirm --onefile --add-data "targets:targets" --name autoclicker autoclick_image.py 2>&1 | tee pyinstaller.log
           echo "dist contents:"
           ls -la dist || true
       - name: Prepare artifact
+        if: always()
         run: |
           mkdir -p artifact
-          cp dist/autoclicker artifact/autoclicker-macos
+          if [ -f dist/autoclicker ]; then cp dist/autoclicker artifact/autoclicker-macos; fi
+          if [ -f pyinstaller.log ]; then cp pyinstaller.log artifact/pyinstaller-macos.log; fi
           if [ -d targets ]; then cp -R targets artifact/targets; fi
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: autoclicker-macos
