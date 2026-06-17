@@ -6,18 +6,21 @@ forces clicking=True, runs the click loop for a short duration, then stops.
 
 import threading
 import time
+
 import main
 
 # Shorten interval for demo
 main.CLICK_INTERVAL = 0.05
 
+
 # Monkeypatch the click function to print instead of moving the real mouse.
 def fake_click(*args, **kwargs):
-    print(f"[SIM CLICK] args={args} kwargs={kwargs}")
+    print(f"[SIMULADO] CLIC args={args} kwargs={kwargs}")
+
 
 main.pyautogui.click = fake_click
 
-print("Starting simulated autoclicker for 2 seconds...")
+print("Iniciando autoclicker simulado durante 2 segundos...")
 main.clicking = True
 main.running = True
 
@@ -31,4 +34,4 @@ time.sleep(2)
 # Stop the loop and wait for thread to finish
 main.running = False
 t.join(timeout=1)
-print("Simulation finished.")
+print("Simulación finalizada.")

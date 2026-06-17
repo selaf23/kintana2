@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Simple GUI wrapper for the image-based autoclicker.
+Interfaz gráfica para el autoclicker basado en imágenes.
 
-Features:
-- Tkinter GUI to add/remove target images (copies into `targets/`).
-- Edit per-target options (click interval, confidence, jitter, button, enabled).
-- Global controls: scan interval, simulate mode, countdown, Start/Stop.
-- Background scanning thread reuses the same matching logic as the CLI script.
-- Safe default: simulation mode ON. Use real clicks only when you disable simulate
-  mode intentionally (and have given accessibility/input privileges on macOS).
+Características:
+- GUI con Tkinter para añadir/eliminar imágenes objetivo (se copian a `targets/`).
+- Editar opciones por objetivo (intervalo de clic, confianza, jitter, botón, habilitado).
+- Controles globales: intervalo de escaneo, modo simulado, cuenta regresiva, Iniciar/Detener.
+- Bucle de escaneo en segundo plano reutiliza la misma lógica que el script CLI.
+- Por seguridad: el modo simulado viene activado por defecto. Desactívalo solo
+  si sabes lo que haces y has concedido los permisos necesarios (macOS).
 
-Also supports a headless CLI mode for quick demos/tests: `--nogui --simulate --demo`.
+También soporta modo sin GUI para demostraciones: `--nogui --simulate --demo`.
 """
 
 import argparse
@@ -24,7 +24,7 @@ import threading
 import time
 from typing import Any, Dict, List
 
-# Import GUI modules lazily in main when needed so headless mode can run without them
+# Importar módulos de GUI cuando se vaya a usar la interfaz
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -33,7 +33,7 @@ except Exception:
 
 import pyautogui
 
-# Optional OpenCV
+# OpenCV opcional
 try:
     import cv2  # noqa: F401
 
@@ -41,7 +41,7 @@ try:
 except Exception:
     HAVE_CV2 = False
 
-# Defaults
+# Valores por defecto
 DEFAULT_TARGETS_DIR = "targets"
 DEFAULT_SCAN_INTERVAL = 0.5
 DEFAULT_CLICK_DELAY = 0.05
@@ -95,11 +95,11 @@ def load_targets_config(targets_dir: str) -> Dict[str, Any]:
             if isinstance(data, dict):
                 return data
             print(
-                f"[WARN] config.json has unexpected format (expected object) — ignoring"
+                f"[AVISO] config.json tiene un formato inesperado (se esperaba un objeto) — se ignorará"
             )
             return {}
     except Exception as e:
-        print(f"[WARN] Failed to read config.json: {e}")
+        print(f"[AVISO] Error al leer config.json: {e}")
         return {}
 
 
@@ -109,7 +109,7 @@ def save_targets_config(targets_dir: str, cfg: Dict[str, Any]) -> None:
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        print(f"[ERROR] Failed to write config.json: {e}")
+        print(f"[ERROR] No se pudo escribir config.json: {e}")
 
 
 def get_target_setting(img_path: str, cfg: Dict[str, Any], key: str, default: Any):
@@ -121,14 +121,13 @@ def get_target_setting(img_path: str, cfg: Dict[str, Any], key: str, default: An
 def locate_all(
     img_path: str, confidence: float, simulate: bool = False, demo: bool = False
 ):
-    """Locate all occurrences on screen.
+    """Localiza coincidencias en pantalla.
 
-    When simulate=True this function returns an empty list (no matches) unless demo=True,
-    where it will return one synthetic match for demonstration.
+    Si simulate=True no devuelve coincidencias, salvo demo=True donde devuelve
+    una coincidencia sintética para demostración.
     """
     if simulate:
         if demo:
-            # return a synthetic bounding box tuple (left, top, width, height)
             return [(100, 100, 20, 20)]
         return []
 
@@ -137,7 +136,7 @@ def locate_all(
             return list(pyautogui.locateAllOnScreen(img_path, confidence=confidence))
         return list(pyautogui.locateAllOnScreen(img_path))
     except Exception as e:
-        print(f"[WARN] locate_all failed for {img_path}: {e}")
+        print(f"[AVISO] locate_all falló para {img_path}: {e}")
         return []
 
 
@@ -153,7 +152,7 @@ def center_of(box) -> tuple[int, int]:
 
 
 class Scanner:
-    """Encapsulates background scanning logic so GUI and CLI can reuse it."""
+    """Lógica de escaneo en segundo plano reutilizable."""
 
     def __init__(
         self,
@@ -182,7 +181,6 @@ class Scanner:
 
         self.running = False
         self.thread = None
-        # (basename, x, y) -> last click time
         self.last_click_times: Dict[tuple, float] = {}
 
     def log(self, msg: str) -> None:
@@ -228,33 +226,33 @@ class Scanner:
 
                 if self.simulate:
                     self.log(
-                        f"SIM CLICK {basename} @ ({tx},{ty}) (cooldown={click_cooldown}s, conf={confidence})"
+                        f"[SIMULADO] CLIC {basename} en ({tx},{ty}) (cooldown={click_cooldown}s, conf={confidence})"
                     )
                 else:
                     try:
                         pyautogui.click(tx, ty, button=button)
                         self.log(
-                            f"CLICK {basename} @ ({tx},{ty}) (button={button}, conf={confidence})"
+                            f"[CLIC] {basename} en ({tx},{ty}) (boton={button}, conf={confidence})"
                         )
                     except Exception as e:
                         self.log(
-                            f"[ERROR] Failed to click {basename} at ({tx},{ty}): {e}"
+                            f"[ERROR] No se pudo clicar {basename} en ({tx},{ty}): {e}"
                         )
 
                 self.last_click_times[key] = time.time()
                 time.sleep(float(click_delay))
 
     def scan_loop(self):
-        self.log("Scanner thread started")
+        self.log("Hilo de escaneo iniciado")
         while self.running:
             cfg = load_targets_config(self.targets_dir)
             imgs = list_target_images(self.targets_dir)
             if not imgs and not self.demo:
-                self.log(f"No target images found in {self.targets_dir}")
+                self.log(f"No se encontraron imágenes objetivo en {self.targets_dir}")
             else:
                 self.find_and_click_once(imgs, cfg)
             time.sleep(self.scan_interval)
-        self.log("Scanner thread stopped")
+        self.log("Hilo de escaneo detenido")
 
     def start(self):
         if self.running:
@@ -270,17 +268,17 @@ class Scanner:
             self.thread = None
 
 
-# GUI implementation
+# Implementación de la GUI
 class AutoclickGUI:
     def __init__(self, targets_dir: str):
         if tk is None:
-            raise RuntimeError("Tkinter is not available in this Python environment")
+            raise RuntimeError("Tkinter no está disponible en este entorno de Python")
 
         self.targets_dir = resolve_targets_dir(targets_dir)
         ensure_targets_dir(self.targets_dir)
 
         self.root = tk.Tk()
-        self.root.title("Image Autoclicker — GUI")
+        self.root.title("Autoclicker por imágenes — GUI")
         self.root.geometry("900x600")
 
         # Variables
@@ -288,7 +286,7 @@ class AutoclickGUI:
         self.simulate_var = tk.BooleanVar(value=True)
         self.countdown_var = tk.IntVar(value=3)
 
-        # Selected target vars
+        # Variables del objetivo seleccionado
         self.sel_enabled = tk.BooleanVar(value=True)
         self.sel_click_interval = tk.DoubleVar(value=DEFAULT_CLICK_COOLDOWN)
         self.sel_confidence = tk.DoubleVar(value=DEFAULT_CONFIDENCE)
@@ -296,24 +294,24 @@ class AutoclickGUI:
         self.sel_button = tk.StringVar(value=DEFAULT_BUTTON)
         self.sel_click_delay = tk.DoubleVar(value=DEFAULT_CLICK_DELAY)
 
-        # Scanner placeholder
+        # Escáner
         self.scanner: Scanner | None = None
 
-        # Build UI
+        # Construir UI
         self._build_ui()
 
-        # Log queue
+        # Cola de log
         self._log_queue: List[str] = []
         self._poll_log()
 
-        # Bind close
+        # Bind cerrar
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
         left_frame = tk.Frame(self.root)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=8, pady=8)
 
-        lb_label = tk.Label(left_frame, text="Targets (in targets/)")
+        lb_label = tk.Label(left_frame, text="Objetivos (en targets/)")
         lb_label.pack(anchor=tk.W)
 
         self.listbox = tk.Listbox(left_frame, width=40, height=25)
@@ -322,35 +320,37 @@ class AutoclickGUI:
 
         btn_frame = tk.Frame(left_frame)
         btn_frame.pack(fill=tk.X, pady=6)
-        tk.Button(btn_frame, text="Add image", command=self._add_image).pack(
+        tk.Button(btn_frame, text="Agregar imagen", command=self._add_image).pack(
             side=tk.LEFT
         )
         tk.Button(
-            btn_frame, text="Remove selected", command=self._remove_selected
+            btn_frame, text="Eliminar seleccionado", command=self._remove_selected
         ).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text="Refresh", command=self._refresh_list).pack(
+        tk.Button(btn_frame, text="Actualizar", command=self._refresh_list).pack(
             side=tk.LEFT
         )
 
         right_frame = tk.Frame(self.root)
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        settings_frame = tk.LabelFrame(right_frame, text="Selected target settings")
+        settings_frame = tk.LabelFrame(
+            right_frame, text="Configuración del objetivo seleccionado"
+        )
         settings_frame.pack(fill=tk.X)
 
         row = 0
-        tk.Checkbutton(settings_frame, text="Enabled", variable=self.sel_enabled).grid(
-            row=row, column=0, sticky=tk.W
-        )
+        tk.Checkbutton(
+            settings_frame, text="Habilitado", variable=self.sel_enabled
+        ).grid(row=row, column=0, sticky=tk.W)
         row += 1
-        tk.Label(settings_frame, text="Click interval (s)").grid(
+        tk.Label(settings_frame, text="Intervalo entre clics (s)").grid(
             row=row, column=0, sticky=tk.W
         )
         tk.Entry(settings_frame, textvariable=self.sel_click_interval, width=10).grid(
             row=row, column=1, sticky=tk.W
         )
         row += 1
-        tk.Label(settings_frame, text="Confidence (0-1)").grid(
+        tk.Label(settings_frame, text="Confianza (0-1)").grid(
             row=row, column=0, sticky=tk.W
         )
         tk.Entry(settings_frame, textvariable=self.sel_confidence, width=10).grid(
@@ -364,14 +364,14 @@ class AutoclickGUI:
             row=row, column=1, sticky=tk.W
         )
         row += 1
-        tk.Label(settings_frame, text="Click delay (s)").grid(
+        tk.Label(settings_frame, text="Retardo entre clics (s)").grid(
             row=row, column=0, sticky=tk.W
         )
         tk.Entry(settings_frame, textvariable=self.sel_click_delay, width=10).grid(
             row=row, column=1, sticky=tk.W
         )
         row += 1
-        tk.Label(settings_frame, text="Button").grid(row=row, column=0, sticky=tk.W)
+        tk.Label(settings_frame, text="Botón").grid(row=row, column=0, sticky=tk.W)
         ttk.Combobox(
             settings_frame,
             textvariable=self.sel_button,
@@ -379,24 +379,24 @@ class AutoclickGUI:
             width=8,
         ).grid(row=row, column=1, sticky=tk.W)
         row += 1
-        tk.Button(settings_frame, text="Save target", command=self._save_selected).grid(
-            row=row, column=0, columnspan=2, pady=6
-        )
+        tk.Button(
+            settings_frame, text="Guardar objetivo", command=self._save_selected
+        ).grid(row=row, column=0, columnspan=2, pady=6)
 
-        global_frame = tk.LabelFrame(right_frame, text="Global controls")
+        global_frame = tk.LabelFrame(right_frame, text="Controles globales")
         global_frame.pack(fill=tk.X, pady=8)
 
-        tk.Label(global_frame, text="Scan interval (s)").grid(
+        tk.Label(global_frame, text="Intervalo de escaneo (s)").grid(
             row=0, column=0, sticky=tk.W
         )
         tk.Entry(global_frame, textvariable=self.scan_interval_var, width=8).grid(
             row=0, column=1, sticky=tk.W
         )
         tk.Checkbutton(
-            global_frame, text="Simulate (no real clicks)", variable=self.simulate_var
+            global_frame, text="Simular (sin clics reales)", variable=self.simulate_var
         ).grid(row=0, column=2, padx=12)
 
-        tk.Label(global_frame, text="Countdown before start (s)").grid(
+        tk.Label(global_frame, text="Cuenta regresiva antes de iniciar (s)").grid(
             row=1, column=0, sticky=tk.W
         )
         tk.Entry(global_frame, textvariable=self.countdown_var, width=8).grid(
@@ -405,20 +405,20 @@ class AutoclickGUI:
 
         ctrl_frame = tk.Frame(global_frame)
         ctrl_frame.grid(row=2, column=0, columnspan=3, pady=8)
-        tk.Button(ctrl_frame, text="Start", command=self._start).pack(side=tk.LEFT)
-        tk.Button(ctrl_frame, text="Stop", command=self._stop).pack(
+        tk.Button(ctrl_frame, text="Iniciar", command=self._start).pack(side=tk.LEFT)
+        tk.Button(ctrl_frame, text="Detener", command=self._stop).pack(
             side=tk.LEFT, padx=8
         )
 
-        log_frame = tk.LabelFrame(right_frame, text="Log")
+        log_frame = tk.LabelFrame(right_frame, text="Registro")
         log_frame.pack(fill=tk.BOTH, expand=True)
         self.log_text = tk.Text(log_frame, height=12)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        # Fill list on startup
+        # Llenar lista al inicio
         self._refresh_list()
 
-    # UI helpers
+    # Helpers de UI
     def _refresh_list(self):
         self.listbox.delete(0, tk.END)
         imgs = list_target_images(self.targets_dir)
@@ -444,23 +444,22 @@ class AutoclickGUI:
 
     def _add_image(self):
         path = filedialog.askopenfilename(
-            title="Select image to add",
-            filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif")],
+            title="Selecciona la imagen a añadir",
+            filetypes=[("Archivos de imagen", "*.png *.jpg *.jpeg *.bmp *.gif")],
         )
         if not path:
             return
         dest = os.path.join(self.targets_dir, os.path.basename(path))
         try:
             shutil.copy2(path, dest)
-            # ensure there's an entry in config
             cfg = load_targets_config(self.targets_dir)
             if os.path.basename(path) not in cfg:
                 cfg[os.path.basename(path)] = {}
                 save_targets_config(self.targets_dir, cfg)
             self._refresh_list()
-            self._log(f"Added {os.path.basename(path)}")
+            self._log(f"Añadida {os.path.basename(path)}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add image: {e}")
+            messagebox.showerror("Error", f"No se pudo añadir la imagen: {e}")
 
     def _remove_selected(self):
         sel = self.listbox.curselection()
@@ -468,7 +467,7 @@ class AutoclickGUI:
             return
         idx = sel[0]
         name = self.listbox.get(idx)
-        if not messagebox.askyesno("Remove", f"Delete {name} from targets/?"):
+        if not messagebox.askyesno("Eliminar", f"¿Eliminar {name} de targets/?"):
             return
         try:
             os.remove(os.path.join(self.targets_dir, name))
@@ -479,12 +478,12 @@ class AutoclickGUI:
             cfg.pop(name, None)
             save_targets_config(self.targets_dir, cfg)
         self._refresh_list()
-        self._log(f"Removed {name}")
+        self._log(f"Eliminada {name}")
 
     def _save_selected(self):
         sel = self.listbox.curselection()
         if not sel:
-            messagebox.showinfo("No selection", "Select a target first")
+            messagebox.showinfo("Sin selección", "Selecciona primero un objetivo")
             return
         name = self.listbox.get(sel[0])
         cfg = load_targets_config(self.targets_dir)
@@ -497,7 +496,7 @@ class AutoclickGUI:
         entry["click_delay"] = float(self.sel_click_delay.get())
         cfg[name] = entry
         save_targets_config(self.targets_dir, cfg)
-        self._log(f"Saved config for {name}")
+        self._log(f"Configuración guardada para {name}")
 
     def _append_log(self, s: str):
         self._log_queue.append(s)
@@ -511,14 +510,12 @@ class AutoclickGUI:
         self.root.after(200, self._poll_log)
 
     def _log(self, s: str):
-        # Thread-safe enqueue for scanner threads
         self._append_log(s)
 
     def _start(self):
         if self.scanner and self.scanner.running:
-            messagebox.showinfo("Already running", "Scanner is already running")
+            messagebox.showinfo("Ya en ejecución", "El escáner ya está en ejecución")
             return
-        # Create scanner with current settings
         simulate = bool(self.simulate_var.get())
         scanner = Scanner(
             self.targets_dir,
@@ -545,19 +542,20 @@ class AutoclickGUI:
             if self.scanner:
                 self.scanner.start()
             return
-        self._log(f"Starting in {n}...")
-        # schedule next second
+        self._log(f"Iniciando en {n}...")
         self.root.after(1000, lambda: self._countdown_and_start(n - 1))
 
     def _stop(self):
         if self.scanner:
             self.scanner.stop()
-            self._log("Stopped scanner")
+            self._log("Escáner detenido")
             self.scanner = None
 
     def _on_close(self):
         if self.scanner and self.scanner.running:
-            if not messagebox.askyesno("Quit", "Scanner is running. Quit anyway?"):
+            if not messagebox.askyesno(
+                "Salir", "El escáner está en ejecución. ¿Salir de todos modos?"
+            ):
                 return
         if self.scanner:
             self.scanner.stop()
@@ -583,42 +581,44 @@ def run_headless(
         if duration and duration > 0:
             time.sleep(duration)
         else:
-            # run until Ctrl-C
             while True:
                 time.sleep(1)
     except KeyboardInterrupt:
-        print("Interrupted")
+        print("Interrumpido")
     finally:
         scanner.stop()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Autoclicker GUI / headless runner")
+    parser = argparse.ArgumentParser(description="Autoclicker GUI / modo sin GUI")
     parser.add_argument(
-        "--targets", help="Path to targets folder (default: targets next to script)"
+        "--targets",
+        help="Ruta a la carpeta targets (por defecto: targets junto al script)",
     )
-    parser.add_argument("--nogui", action="store_true", help="Run in headless CLI mode")
+    parser.add_argument(
+        "--nogui", action="store_true", help="Ejecutar en modo headless (sin GUI)"
+    )
     parser.add_argument(
         "--simulate",
         action="store_true",
-        help="Simulate clicks (no real mouse click). In GUI default is ON",
+        help="Simular los clics (sin clic real). En la GUI está activado por defecto",
     )
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Headless demo: simulate detection even without real images",
+        help="Demo en headless: simular detección aun sin imágenes reales",
     )
     parser.add_argument(
         "--duration",
         type=float,
         default=2.0,
-        help="Duration (s) to run in headless demo; default 2s",
+        help="Duración (s) para demo en headless; por defecto 2s",
     )
     parser.add_argument(
         "--scan-interval",
         type=float,
         default=DEFAULT_SCAN_INTERVAL,
-        help="Scan interval for headless run",
+        help="Intervalo de escaneo para modo headless",
     )
 
     args = parser.parse_args()
@@ -626,7 +626,6 @@ def main():
     targets_dir = resolve_targets_dir(args.targets)
 
     if args.nogui:
-        # default to simulate True in headless unless user specifically provided --simulate
         simulate = bool(args.simulate) if args.simulate else True
         run_headless(
             targets_dir,
@@ -637,7 +636,6 @@ def main():
         )
         return
 
-    # GUI mode
     app = AutoclickGUI(targets_dir)
     app.run()
 

@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
-Autoclicker that finds target images in `targets/` and clicks them.
+Autoclicker que encuentra imágenes objetivo en `targets/` y hace clic en ellas.
 
-Controls:
- - F6 : toggle start/stop scanning & clicking
- - Esc : exit program
+Controles:
+ - F6 : alternar inicio/detención del escaneo y clics
+ - Esc : salir del programa
 
-Behavior:
- - Scans all images in the `targets/` directory and clicks any matches.
- - Uses OpenCV-backed confidence matching when `opencv-python` is installed.
- - Per-target options can be provided in `targets/config.json` (see README).
+Comportamiento:
+ - Escanea todas las imágenes en la carpeta `targets/` y hace clic en las coincidencias.
+ - Usa OpenCV (si está instalado) para matching por `confidence`.
+ - Las opciones por objetivo pueden definirse en `targets/config.json`.
 
-Safety:
- - This program controls your REAL mouse. Do not run it unless you understand
-   the consequences and you have accessibility/input-monitoring permission on
-   macOS. Use F6 to start/stop and Esc to quit.
+Precaución:
+ - Este programa controla el ratón REAL. Úsalo con precaución y concede permisos
+   de accesibilidad/input-monitoring en macOS si vas a ejecutar clics reales.
 """
 
 import argparse
@@ -30,8 +29,7 @@ from typing import Any, Dict, List
 import pyautogui
 from pynput import keyboard
 
-# Optional: OpenCV improves image recognition accuracy (pyautogui can use it
-# to support the `confidence` parameter).
+# OpenCV opcional
 try:
     import cv2  # noqa: F401
 
@@ -39,47 +37,35 @@ try:
 except Exception:
     HAVE_CV2 = False
 
-# Defaults (tweakable via CLI)
+# Valores por defecto
 DEFAULT_TARGETS_DIR = "targets"
-DEFAULT_SCAN_INTERVAL = 0.5  # seconds between scans
-DEFAULT_CLICK_DELAY = 0.05  # delay between clicks when multiple targets found
-DEFAULT_CONFIDENCE = 0.85  # only used if OpenCV is available
-DEFAULT_JITTER = 3  # pixels random offset to avoid exact-repeat clicks
-DEFAULT_CLICK_COOLDOWN = (
-    1.0  # default seconds to wait before clicking same (img,x,y) again
-)
+DEFAULT_SCAN_INTERVAL = 0.5
+DEFAULT_CLICK_DELAY = 0.05
+DEFAULT_CONFIDENCE = 0.85
+DEFAULT_JITTER = 3
+DEFAULT_CLICK_COOLDOWN = 1.0
 DEFAULT_BUTTON = "left"
 
-# Global run flags used by keyboard callback and the scan thread
+# Flags globales
 clicking = False
 running = True
 
-# Keep track of last-click times per (image basename, x, y) to avoid re-clicking too
-# fast when scans are frequent.
+# Registro de últimos clics para evitar clics repetidos rápidos
 last_click_times: Dict[tuple, float] = {}
 
 pyautogui.FAILSAFE = True
 
 
 def exe_dir() -> str:
-    """Return directory where the script or executable lives."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def resolve_targets_dir(cli_path: str | None) -> str:
-    """Resolve the targets directory.
-
-    Order of resolution:
-      1) CLI override if provided
-      2) If frozen bundle contains an embedded targets/ folder, use it
-      3) Otherwise use a `targets/` folder next to the script/executable
-    """
     if cli_path:
         return os.path.abspath(cli_path)
 
-    # If running from a PyInstaller bundle, first check the bundle temp dir
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
@@ -87,12 +73,10 @@ def resolve_targets_dir(cli_path: str | None) -> str:
             if os.path.isdir(cand):
                 return cand
 
-    # Fallback: `targets/` next to the script/executable
     return os.path.join(exe_dir(), DEFAULT_TARGETS_DIR)
 
 
 def list_target_images(targets_dir: str) -> List[str]:
-    """Return sorted list of image file paths inside targets_dir."""
     if not os.path.isdir(targets_dir):
         return []
     exts = ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif")
@@ -103,7 +87,6 @@ def list_target_images(targets_dir: str) -> List[str]:
 
 
 def load_targets_config(targets_dir: str) -> Dict[str, Any]:
-    """Load `targets/config.json` if present. Returns mapping by filename (basename)."""
     cfg_path = os.path.join(targets_dir, "config.json")
     if not os.path.exists(cfg_path):
         return {}
@@ -113,47 +96,36 @@ def load_targets_config(targets_dir: str) -> Dict[str, Any]:
             if isinstance(data, dict):
                 return data
             print(
-                f"[WARN] config.json has unexpected format (expected object) — ignoring"
+                f"[AVISO] config.json tiene formato inesperado (se esperaba un objeto); se ignorará"
             )
             return {}
     except Exception as e:
-        print(f"[WARN] Failed to read config.json: {e}")
+        print(f"[AVISO] Error al leer config.json: {e}")
         return {}
 
 
 def locate_all(img_path: str, confidence: float) -> List[pyautogui.Box]:
-    """Locate all occurrences of `img_path` on screen.
-
-    If OpenCV is available the `confidence` parameter is used; otherwise a
-    basic (exact) search is performed.
-    """
     try:
         if HAVE_CV2:
             return list(pyautogui.locateAllOnScreen(img_path, confidence=confidence))
         return list(pyautogui.locateAllOnScreen(img_path))
     except Exception as e:
-        # PyAutoGUI raises when the image format isn't supported or other issues
-        print(f"[WARN] locate_all failed for {img_path}: {e}")
+        print(f"[AVISO] locate_all falló para {img_path}: {e}")
         return []
 
 
 def center_of(box) -> tuple[int, int]:
-    """Return integer (x,y) center coords for a pyautogui Box or tuple."""
     try:
-        # pyautogui.center returns a Point-like object with x,y attributes
         return int(box.x + box.width / 2), int(box.y + box.height / 2)
     except Exception:
-        # Fallback: some pyautogui versions return a tuple
         try:
             cx, cy = pyautogui.center(box)
             return int(cx), int(cy)
         except Exception:
-            # Last fallback: try to index
             return int(box[0] + box[2] / 2), int(box[1] + box[3] / 2)
 
 
 def get_target_setting(img_path: str, cfg: Dict[str, Any], key: str, default: Any):
-    """Return per-target setting from config (lookup by basename)."""
     basename = os.path.basename(img_path)
     entry = cfg.get(basename) or cfg.get(img_path) or {}
     return entry.get(key, default)
@@ -168,13 +140,11 @@ def find_and_click_once(
     global_button: str,
     cfg: Dict[str, Any],
 ):
-    """Find matches for each target image and click them once respecting per-target cooldowns."""
     global last_click_times
 
     now = time.time()
 
     for img in target_images:
-        # Per-target confidence (falls back to the global confidence arg)
         confidence = get_target_setting(img, cfg, "confidence", global_confidence)
         matches = locate_all(img, confidence)
         if not matches:
@@ -185,7 +155,6 @@ def find_and_click_once(
             basename = os.path.basename(img)
             key = (basename, cx, cy)
 
-            # Determine per-target cooldown and other overrides
             click_cooldown = get_target_setting(
                 img, cfg, "click_cooldown", global_click_cooldown
             )
@@ -201,10 +170,8 @@ def find_and_click_once(
 
             last = last_click_times.get(key, 0)
             if now - last < float(click_cooldown):
-                # skip because we clicked this spot recently
                 continue
 
-            # Add a small random jitter so clicks are not identical every pass
             jx = random.randint(-int(jitter), int(jitter)) if jitter else 0
             jy = random.randint(-int(jitter), int(jitter)) if jitter else 0
             tx, ty = cx + jx, cy + jy
@@ -213,12 +180,11 @@ def find_and_click_once(
                 pyautogui.click(tx, ty, button=button)
                 last_click_times[key] = time.time()
                 print(
-                    f"[CLICK] {basename} @ ({tx},{ty}) (cooldown={click_cooldown}s, confidence={confidence})"
+                    f"[CLIC] {basename} en ({tx},{ty}) (cooldown={click_cooldown}s, confianza={confidence})"
                 )
             except Exception as e:
-                print(f"[ERROR] Failed to click {img} at ({tx},{ty}): {e}")
+                print(f"[ERROR] No se pudo clicar {basename} en ({tx},{ty}): {e}")
 
-            # Small pause between clicks to avoid firing too fast
             time.sleep(float(click_delay))
 
 
@@ -231,17 +197,15 @@ def scan_loop(
     click_cooldown: float,
     button: str,
 ):
-    """Background loop that scans the screen and clicks when enabled."""
     global running, clicking
 
     while running:
         if clicking:
-            # Reload config each pass so changes while running are honored
             cfg = load_targets_config(targets_dir)
             target_images = list_target_images(targets_dir)
             if not target_images:
                 print(
-                    f"[WARN] No target images found in {targets_dir}. Add PNG/JPG files there."
+                    f"[AVISO] No se encontraron imágenes objetivo en {targets_dir}. Añade archivos PNG/JPG allí."
                 )
             else:
                 find_and_click_once(
@@ -256,20 +220,18 @@ def scan_loop(
 
             time.sleep(scan_interval)
         else:
-            # idle sleep when paused
             time.sleep(0.1)
 
 
 def on_press(key):
-    """Keyboard callback: F6 toggles clicking, Esc exits."""
     global clicking, running
     try:
         if key == keyboard.Key.f6:
             clicking = not clicking
-            state = "STARTED" if clicking else "STOPPED"
+            state = "INICIADO" if clicking else "DETENIDO"
             print(f"[Autoclicker] {state}")
         elif key == keyboard.Key.esc:
-            print("[Autoclicker] Exiting...")
+            print("[Autoclicker] Saliendo...")
             running = False
             return False
     except Exception:
@@ -278,54 +240,54 @@ def on_press(key):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Image-based autoclicker — place target images in a `targets/` folder next to the executable."
+        description="Autoclicker por imágenes — coloca imágenes objetivo en una carpeta `targets/` junto al ejecutable."
     )
     parser.add_argument(
         "-t",
         "--targets",
-        help="Path to targets folder (default: targets next to executable)",
+        help="Ruta a la carpeta targets (por defecto: targets junto al ejecutable)",
     )
     parser.add_argument(
         "-C",
         "--confidence",
         type=float,
         default=DEFAULT_CONFIDENCE,
-        help="Matching confidence (only with OpenCV). Default: %(default)s",
+        help="Confiabilidad de matching (solo con OpenCV). Por defecto: %(default)s",
     )
     parser.add_argument(
         "--scan-interval",
         type=float,
         default=DEFAULT_SCAN_INTERVAL,
-        help="Seconds between screen scans. Default: %(default)s",
+        help="Segundos entre escaneos de pantalla. Por defecto: %(default)s",
     )
     parser.add_argument(
         "--click-delay",
         type=float,
         default=DEFAULT_CLICK_DELAY,
-        help="Delay (s) between clicks when multiple targets found. Default: %(default)s",
+        help="Retardo (s) entre clics cuando se encuentran múltiples coincidencias. Por defecto: %(default)s",
     )
     parser.add_argument(
         "--jitter",
         type=int,
         default=DEFAULT_JITTER,
-        help="Random pixel jitter to apply to clicks. Default: %(default)s",
+        help="Jitter aleatorio en píxeles aplicado a los clics. Por defecto: %(default)s",
     )
     parser.add_argument(
         "--click-cooldown",
         type=float,
         default=DEFAULT_CLICK_COOLDOWN,
-        help="Default cooldown (s) before re-clicking same (image,x,y). This can be overridden per-target in targets/config.json",
+        help="Cooldown por defecto (s) antes de reclicar la misma posición (puede ser anulado por objetivo). Por defecto: %(default)s",
     )
     parser.add_argument(
         "--button",
         choices=("left", "right", "middle"),
         default=DEFAULT_BUTTON,
-        help="Mouse button to use for clicks",
+        help="Botón del ratón a usar para los clics",
     )
     parser.add_argument(
         "--auto-start",
         action="store_true",
-        help="Start clicking immediately (dangerous). By default you must press F6 to start.",
+        help="Iniciar automáticamente (peligroso). Por defecto debes presionar F6 para iniciar.",
     )
 
     args = parser.parse_args()
@@ -333,18 +295,17 @@ def main():
     targets_dir = resolve_targets_dir(args.targets)
 
     print("=" * 60)
-    print("Image Autoclicker")
-    print(f"Targets dir: {targets_dir}")
+    print("Autoclicker por imágenes")
+    print(f"Carpeta de objetivos: {targets_dir}")
     if HAVE_CV2:
-        print(f"OpenCV available — using confidence={args.confidence}")
+        print(f"OpenCV disponible — usando confianza={args.confidence}")
     else:
         print(
-            "OpenCV not found — running exact-image searches (install opencv-python for better results)"
+            "OpenCV no encontrado — se realizarán búsquedas exactas (instala opencv-python para mejores resultados)"
         )
-    print("Controls: press F6 to start/stop clicking, Esc to exit")
+    print("Controles: presiona F6 para iniciar/detener los clics, Esc para salir")
     print("=" * 60)
 
-    # Start scanning thread
     t = threading.Thread(
         target=scan_loop,
         args=(
@@ -360,18 +321,15 @@ def main():
     )
     t.start()
 
-    # Optionally start immediately
     global clicking
     clicking = bool(args.auto_start)
 
-    # Keyboard listener blocks until Esc is pressed (or listener returns False)
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
 
-    # Clean shutdown
-    print("Waiting for background thread to finish...")
+    print("Esperando a que termine el hilo de fondo...")
     t.join(timeout=1)
-    print("Goodbye")
+    print("Adiós")
 
 
 if __name__ == "__main__":

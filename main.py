@@ -1,35 +1,33 @@
 """
-Simple Autoclicker
--------------------
-Clicks repeatedly at a fixed screen position (e.g. a spot on a game's
-canvas in your browser), with a configurable interval.
+Autoclicker simple
+------------------
+Hace clic repetidamente en una posición fija de la pantalla (por ejemplo una zona
+de un juego en el navegador), con intervalo configurable.
 
-SETUP (run these once on your own machine, in a terminal):
+CONFIGURACIÓN (ejecuta esto una vez en tu máquina):
     pip install pyautogui pynput
 
-HOW IT WORKS:
-    1. Run the script.
-    2. It gives you a few seconds to move your mouse to the spot you
-       want to click (e.g. the button/canvas area in your game), OR
-       you can hardcode the X, Y coordinates below.
-    3. Press F6 to start/stop clicking. Press Esc to quit entirely.
+COMO FUNCIONA:
+    1. Ejecuta el script.
+    2. Te da unos segundos para posicionar el ratón en el punto donde quieres clicar
+       (o puedes fijar coordenadas en FIXED_X, FIXED_Y).
+    3. Presiona F6 para iniciar/parar. Presiona Esc para salir.
 
-NOTES:
-    - This controls your REAL mouse cursor. Don't move it elsewhere
-      while it's running, or clicks will land in the wrong place.
-    - Some games detect/ban automated clicking. Check the game's
-      rules before using this, and use at your own risk.
+NOTAS:
+    - Este script controla el cursor REAL. No muevas el ratón mientras está activo.
+    - Algunos juegos detectan automatizaciones. Usa bajo tu responsabilidad.
 """
 
-import time
 import threading
+import time
+
 import pyautogui
 from pynput import keyboard
 
-# ---------------- CONFIGURATION ----------------
-CLICK_INTERVAL = 0.1     # seconds between clicks (0.1 = 10 clicks/sec)
-USE_CURRENT_MOUSE_POS = True   # True = click wherever mouse is when started
-FIXED_X, FIXED_Y = 500, 500    # used only if USE_CURRENT_MOUSE_POS = False
+# ---------------- CONFIGURACIÓN ----------------
+CLICK_INTERVAL = 0.1  # segundos entre clicks (0.1 = 10 clicks/seg)
+USE_CURRENT_MOUSE_POS = True  # True = clicar donde esté el ratón al iniciar
+FIXED_X, FIXED_Y = 500, 500  # usado solo si USE_CURRENT_MOUSE_POS = False
 # -------------------------------------------------
 
 clicking = False
@@ -52,23 +50,23 @@ def on_press(key):
     global clicking, running
     if key == keyboard.Key.f6:
         clicking = not clicking
-        state = "STARTED" if clicking else "STOPPED"
+        state = "INICIADO" if clicking else "DETENIDO"
         print(f"[Autoclicker] {state}")
     elif key == keyboard.Key.esc:
-        print("[Autoclicker] Exiting...")
+        print("[Autoclicker] Saliendo...")
         running = False
-        return False  # stops the listener
+        return False  # detiene el listener
 
 
 def main():
     print("=" * 50)
-    print("Autoclicker ready.")
-    print("Press F6 to start/stop clicking.")
-    print("Press Esc to quit.")
+    print("Autoclicker listo.")
+    print("Presiona F6 para iniciar/parar los clics.")
+    print("Presiona Esc para salir.")
     if USE_CURRENT_MOUSE_POS:
-        print("Mode: clicks at wherever your mouse is positioned.")
+        print("Modo: clics en la posición actual del ratón.")
     else:
-        print(f"Mode: clicks at fixed position ({FIXED_X}, {FIXED_Y})")
+        print(f"Modo: clics en la posición fija ({FIXED_X}, {FIXED_Y})")
     print("=" * 50)
 
     t = threading.Thread(target=click_loop, daemon=True)
