@@ -36,6 +36,15 @@ import subprocess
 
 import pyautogui
 
+# Atajos globales (opcional)
+try:
+    from pynput import keyboard as pkb
+
+    HAVE_PYNPUT = True
+except Exception:
+    pkb = None
+    HAVE_PYNPUT = False
+
 # OpenCV opcional
 try:
     import cv2  # noqa: F401
@@ -307,6 +316,13 @@ class AutoclickGUI:
         self._log_queue: List[str] = []
         self._poll_log()
 
+        # Atajos de teclado (local y global)
+        try:
+            self._init_keyboard_listener()
+        except Exception:
+            # no interrumpe si pynput/teclas fallan
+            self._log("[INFO] No se pudieron inicializar atajos de teclado globales")
+
         # Bind cerrar
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -558,6 +574,50 @@ class AutoclickGUI:
             self._log("Escáner detenido")
             self.scanner = None
 
+    def _toggle_scan(self):
+        """Alterna el escáner (Iniciar/Detener)."""
+        if self.scanner and self.scanner.running:
+            self._stop()
+        else:
+            self._start()
+
+    def _init_keyboard_listener(self):
+        """Configura atajos locales (cuando la ventana tiene foco) y un listener global opcional.
+
+        - F6: alterna Iniciar/Detener
+        - Esc: cierra la aplicación (con confirmación si el escáner está en ejecución)
+        """
+        try:
+            # atajos locales dentro de la ventana
+            self.root.bind_all("<F6>", lambda e: self._toggle_scan())
+            self.root.bind_all("<Escape>", lambda e: self._on_close())
+        except Exception:
+            pass
+
+        if pkb is None:
+            self._log("[INFO] pynput no disponible: atajos globales deshabilitados")
+            return
+
+        try:
+
+            def on_press(key):
+                try:
+                    if key == pkb.Key.f6:
+                        # ejecutar en el hilo de la GUI
+                        self.root.after(0, self._toggle_scan)
+                    elif key == pkb.Key.esc:
+                        self.root.after(0, self._on_close)
+                except Exception as e:
+                    self._log(f"[ERROR] Listener teclado: {e}")
+
+            listener = pkb.Listener(on_press=on_press)
+            listener.daemon = True
+            listener.start()
+            self._kb_listener = listener
+            self._log("[INFO] Atajos globales: F6 (toggle), Esc (salir) activos")
+        except Exception as e:
+            self._log(f"[ERROR] No se pudo iniciar listener de teclado global: {e}")
+
     def _open_positions(self):
         """Abrir el gestor de posiciones integrado en la misma aplicación."""
         try:
@@ -592,6 +652,7 @@ class AutoclickGUI:
             return
 
         win = tk.Toplevel(self.root)
+        self._positions_win = win
         win.title("Gestor de posiciones")
         win.geometry("760x420")
 
@@ -829,6 +890,39 @@ class AutoclickGUI:
 
         populate_list()
         poll_log_main()
+
+        try:
+            # Exponer la ventana en self para que el listener global pueda inspeccionarla
+            self._positions_win = win
+        except Exception:
+            pass
+
+        # Atajos locales para control rápido desde el gestor de posiciones
+        try:
+            win.bind("<F6>", lambda e: toggle_local_scan())
+            win.bind("<Escape>", lambda e: self._on_close())
+        except Exception:
+            pass
+
+        def toggle_local_scan():
+            # Actúa como los botones Iniciar/Detener del gestor
+            if running_flag[0]:
+                stop_clicking()
+            else:
+                start_clicking()
+
+        enqueue_log(
+            "[INFO] Atajos locales: F6 (toggle positions), Esc (cerrar gestor) activos"
+        )
+
+        # Mantener referencia hasta que la ventana se cierre
+        try:
+            win.mainloop()
+        finally:
+            try:
+                self._positions_win = None
+            except Exception:
+                pass
 
     def _on_close(self):
         if self.scanner and self.scanner.running:
