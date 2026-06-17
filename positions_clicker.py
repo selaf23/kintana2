@@ -25,6 +25,15 @@ import time
 import pyautogui
 from pynput import keyboard
 
+# Optional GUI support
+try:
+    import tkinter as tk
+    from tkinter import simpledialog, messagebox
+    import queue
+except Exception:
+    tk = None
+    queue = None
+
 TARGETS_DIR = os.path.join(os.path.dirname(__file__), "targets")
 POSITIONS_FILE = os.path.join(TARGETS_DIR, "positions.json")
 
@@ -100,9 +109,9 @@ def on_press(key):
         pass
 
 
-def click_loop(positions_list, global_interval, simulate):
+def click_loop(positions_list, global_interval, simulate, log_fn=print):
     global running, clicking, last_click_times
-    print("Hilo de clics iniciado. Presiona F6 para comenzar/parar, Esc para salir.")
+    log_fn("Hilo de clics iniciado. Presiona F6 (o usa el botón Iniciar) para comenzar/parar, Esc para salir.")
     while running:
         if clicking:
             now = time.time()
@@ -124,22 +133,20 @@ def click_loop(positions_list, global_interval, simulate):
                     jy = pyautogui.random.randint(-jitter, jitter)
                 tx, ty = x + jx, y + jy
                 if simulate:
-                    print(
-                        f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)"
-                    )
+                    log_fn(f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)")
                 else:
                     try:
                         pyautogui.click(tx, ty, button=button)
-                        print(f"[CLIC] {name} en ({tx},{ty}) (boton={button})")
+                        log_fn(f"[CLIC] {name} en ({tx},{ty}) (boton={button})")
                     except Exception as e:
-                        print(f"[ERROR] No se pudo clicar {name} en ({tx},{ty}): {e}")
+                        log_fn(f"[ERROR] No se pudo clicar {name} en ({tx},{ty}): {e}")
                 last_click_times[(name, x, y)] = time.time()
                 time.sleep(float(info.get("click_delay", 0.05)))
             # pausa entre pasadas
             time.sleep(global_interval)
         else:
             time.sleep(0.1)
-    print("Hilo de clics detenido")
+    log_fn("Hilo de clics detenido")
 
 
 def main():
@@ -168,6 +175,7 @@ def main():
         default=3,
         help="Cuenta regresiva antes de iniciar (s) si --real)",
     )
++    parser.add_argument("--gui", action="store_true", help="Abrir interfaz gráfica para controlar posiciones y clics")
     args = parser.parse_args()
 
     simulate = not args.real
@@ -195,30 +203,135 @@ def main():
     print(f"Posiciones: {positions}")
     print(f"Modo: {'SIMULADO' if simulate else 'REAL'}")
 
-    if not simulate:
-        print(
-            "ADVERTENCIA: se habilitarán clics reales. Asegúrate de que el cursor esté en una zona segura."
-        )
-        print(f"Iniciando en {args.countdown} segundos...")
-        time.sleep(args.countdown)
++    # If GUI requested, launch simple Tk window with Start button and log
++    if args.gui:
++        if tk is None:
++            print("Tkinter no está disponible en este entorno; no se puede iniciar la GUI")
++            return
++        # Build simple GUI
++        log_q = queue.Queue()
++
++        def enqueue_log(s):
++            log_q.put(s)
++
++        def poll_log(text_widget):
++            while not log_q.empty():
++                text_widget.insert("end", log_q.get() + "\n")
++                text_widget.see("end")
++            text_widget.after(200, lambda: poll_log(text_widget))
++
++        root = tk.Tk()
++        root.title("Positions Clicker — GUI")
++        root.geometry("700x400")
++
++        left = tk.Frame(root)
++        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
++        tk.Label(left, text="Posiciones").pack()
++        lb = tk.Listbox(left, width=30, height=20)
++        lb.pack()
++
++        def populate_list():
++            lb.delete(0, tk.END)
++            for k in positions.keys():
++                lb.insert(tk.END, k)
++
++        def add_current():
++            pos = pyautogui.position()
++            name = f"pos_{len(positions)+1}"
++            positions[name] = {"x": pos.x, "y": pos.y, "click_cooldown": 1.0, "jitter": 0, "button": "left", "enabled": True}
++            populate_list()
++            enqueue_log(f"Añadida {name} -> ({pos.x},{pos.y})")
++
++        def remove_selected():
++            sel = lb.curselection()
++            if not sel:
++                return
++            name = lb.get(sel[0])
++            positions.pop(name, None)
++            populate_list()
++            enqueue_log(f"Eliminada {name}")
++
++        tk.Button(left, text="Agregar posición (cursor)", command=add_current).pack(pady=4)
++        tk.Button(left, text="Eliminar seleccionado", command=remove_selected).pack(pady=4)
++        tk.Button(left, text="Guardar posiciones", command=lambda: (save_positions(positions), enqueue_log(f"Guardadas {len(positions)} posiciones"))).pack(pady=4)
++
++        right = tk.Frame(root)
++        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
++        ctrl = tk.Frame(right)
++        ctrl.pack(fill=tk.X)
++        tk.Label(ctrl, text="Intervalo (s):").grid(row=0, column=0)
++        interval_var = tk.DoubleVar(value=args.interval)
++        tk.Entry(ctrl, textvariable=interval_var, width=6).grid(row=0, column=1)
++        sim_var = tk.BooleanVar(value=simulate)
++        tk.Checkbutton(ctrl, text="Simular", variable=sim_var).grid(row=0, column=2, padx=8)
++        tk.Label(ctrl, text="Cuenta regresiva: ").grid(row=1, column=0)
++        count_var = tk.IntVar(value=args.countdown)
++        tk.Entry(ctrl, textvariable=count_var, width=6).grid(row=1, column=1)
++
++        log_text = tk.Text(right)
++        log_text.pack(fill=tk.BOTH, expand=True)
++
++        thread = None
++
++        def start_clicking():
++            nonlocal thread
++            if thread and thread.is_alive():
++                enqueue_log("Ya en ejecución")
++                return
++            sim = bool(sim_var.get())
++            interval = float(interval_var.get())
++            countdown = int(count_var.get())
++            if not sim:
++                enqueue_log("ADVERTENCIA: se habilitarán clics reales. Preparando cuenta regresiva...")
++                for i in range(countdown, 0, -1):
++                    enqueue_log(f"Iniciando en {i}...")
++                    time.sleep(1)
++            global clicking
++            clicking = True
++            thread = threading.Thread(target=click_loop, args=(positions, interval, sim, enqueue_log), daemon=True)
++            thread.start()
++            enqueue_log("Hilo de clics lanzado")
++
++        def stop_clicking():
++            global clicking
++            clicking = False
++            enqueue_log("Detenido por usuario")
++
++        tk.Button(ctrl, text="Iniciar", command=start_clicking).grid(row=1, column=2, padx=8)
++        tk.Button(ctrl, text="Detener", command=stop_clicking).grid(row=1, column=3, padx=8)
++
++        populate_list()
++        poll_log(log_text)
++        root.mainloop()
++        return
++
+     if not simulate:
+         print(
+             "ADVERTENCIA: se habilitarán clics reales. Asegúrate de que el cursor esté en una zona segura."
+         )
+         print(f"Iniciando en {args.countdown} segundos...")
+         time.sleep(args.countdown)
 
-    # Start background thread
-    t = threading.Thread(
-        target=click_loop, args=(positions, args.interval, simulate), daemon=True
-    )
-    t.start()
+     # Start background thread
+-    t = threading.Thread(
+-        target=click_loop, args=(positions, args.interval, simulate), daemon=True
+-    )
++    t = threading.Thread(
++        target=click_loop, args=(positions, args.interval, simulate), daemon=True
++    )
+     t.start()
 
-    # Keyboard listener (F6 to toggle, Esc to exit)
-    with keyboard.Listener(on_press=on_press) as listener:
-        if args.auto_start:
-            global clicking
-            clicking = True
-            print("Autostart activado: comenzando a clicar")
-        listener.join()
+     # Keyboard listener (F6 to toggle, Esc to exit)
+     with keyboard.Listener(on_press=on_press) as listener:
+         if args.auto_start:
+             global clicking
+             clicking = True
+             print("Autostart activado: comenzando a clicar")
+         listener.join()
 
-    # Clean shutdown
-    running = False
-    t.join(timeout=1)
+     # Clean shutdown
+     running = False
+     t.join(timeout=1)
 
 
 if __name__ == "__main__":
