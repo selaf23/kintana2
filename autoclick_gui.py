@@ -31,6 +31,8 @@ try:
 except Exception:
     tk = None  # type: ignore
 
+import subprocess
+
 import pyautogui
 
 # OpenCV opcional
@@ -409,6 +411,10 @@ class AutoclickGUI:
         tk.Button(ctrl_frame, text="Detener", command=self._stop).pack(
             side=tk.LEFT, padx=8
         )
+        # Button to open Positions manager (separate GUI)
+        tk.Button(ctrl_frame, text="Posiciones", command=self._open_positions).pack(
+            side=tk.LEFT, padx=8
+        )
 
         log_frame = tk.LabelFrame(right_frame, text="Registro")
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -550,6 +556,45 @@ class AutoclickGUI:
             self.scanner.stop()
             self._log("Escáner detenido")
             self.scanner = None
+
+    def _open_positions(self):
+        """Abrir el gestor de posiciones en una nueva ventana (usa positions_clicker.py)
+        Si `positions_clicker.start_positions_gui` está disponible lo llama directamente,
+        si no, intenta lanzar un nuevo proceso Python con el script.
+        """
+        try:
+            import positions_clicker
+        except Exception:
+            positions_clicker = None
+
+        # Preferir llamar a la función interna si existe (mejor integración)
+        if positions_clicker and hasattr(positions_clicker, "start_positions_gui"):
+            try:
+                positions_clicker.start_positions_gui(
+                    positions=None,
+                    interval=float(self.scan_interval_var.get()),
+                    simulate=bool(self.simulate_var.get()),
+                    countdown=int(self.countdown_var.get()),
+                    targets_dir=self.targets_dir,
+                    parent=self.root,
+                )
+                return
+            except Exception as e:
+                # si falla, caeremos al fallback de subprocess
+                self._log(
+                    f"[AVISO] start_positions_gui falló: {e}; intentamos lanzar proceso externo"
+                )
+
+        # Fallback: ejecutar el script como proceso separado
+        script_path = os.path.join(exe_dir(), "positions_clicker.py")
+        if os.path.exists(script_path):
+            try:
+                subprocess.Popen([sys.executable, script_path, "--gui"])
+                self._log(f"Lanzado gestor de posiciones: {script_path}")
+            except Exception as e:
+                self._log(f"[ERROR] No se pudo lanzar gestor de posiciones: {e}")
+        else:
+            self._log("[ERROR] positions_clicker.py no encontrado en el paquete")
 
     def _on_close(self):
         if self.scanner and self.scanner.running:
