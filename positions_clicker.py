@@ -336,6 +336,33 @@ def main():
         count_var = tk.IntVar(value=args.countdown)
         tk.Entry(ctrl, textvariable=count_var, width=6).grid(row=1, column=1)
 
+        # Retardo entre posiciones (global o por posición)
+        tk.Label(ctrl, text="Retardo entre posiciones (s):").grid(
+            row=0, column=3, sticky=tk.W
+        )
+        pos_delay_var = tk.DoubleVar(value=0.05)
+        tk.Entry(ctrl, textvariable=pos_delay_var, width=6).grid(
+            row=0, column=4, sticky=tk.W
+        )
+        use_global_delay_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            ctrl, text="Usar retardo global", variable=use_global_delay_var
+        ).grid(row=0, column=5, padx=8)
+
+        def apply_global_delay_to_all():
+            try:
+                d = float(pos_delay_var.get())
+            except Exception:
+                messagebox.showerror("Error", "Retardo debe ser numérico")
+                return
+            for k in positions.keys():
+                positions[k]["click_delay"] = float(d)
+            enqueue_log(f"Aplicado retardo {d}s a {len(positions)} posiciones")
+
+        tk.Button(ctrl, text="Aplicar a todas", command=apply_global_delay_to_all).grid(
+            row=1, column=4, padx=4
+        )
+
         log_text = tk.Text(right)
         log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -380,7 +407,15 @@ def main():
                                     f"[ERROR] No se pudo clicar {name} en ({tx},{ty}): {e}"
                                 )
                         last_clicks[(name, x, y)] = time.time()
-                        time.sleep(float(info.get("click_delay", 0.05)))
+                        # Retardo entre posiciones (global o por posición)
+                        try:
+                            if bool(use_global_delay_var.get()):
+                                delay_between = float(pos_delay_var.get())
+                            else:
+                                delay_between = float(info.get("click_delay", 0.05))
+                        except Exception:
+                            delay_between = float(info.get("click_delay", 0.05))
+                        time.sleep(delay_between)
                     time.sleep(float(interval_var.get()))
                 else:
                     time.sleep(0.1)
