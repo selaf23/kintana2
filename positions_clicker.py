@@ -115,7 +115,9 @@ def on_press(key):
         pass
 
 
-def click_loop(positions_list, global_interval, simulate, log_fn=print):
+def click_loop(
+    positions_list, global_interval, simulate, randomize=False, log_fn=print
+):
     global running, clicking, last_click_times
     log_fn(
         "Hilo de clics iniciado. Usa el botón Iniciar/Detener o F6 para controlar, Esc para salir (CLI)."
@@ -123,8 +125,24 @@ def click_loop(positions_list, global_interval, simulate, log_fn=print):
     while running:
         if clicking:
             now = time.time()
-            for name, info in positions_list.items():
-                if not info.get("enabled", True):
+            # Construir lista de posiciones habilitadas
+            entries = [
+                (n, info)
+                for n, info in positions_list.items()
+                if info.get("enabled", True)
+            ]
+            if not entries:
+                time.sleep(0.1)
+                continue
+            names = [n for n, _ in entries]
+            if randomize:
+                names_iter = list(names)
+                random.shuffle(names_iter)
+            else:
+                names_iter = names
+            for name in names_iter:
+                info = positions_list.get(name, {})
+                if not info:
                     continue
                 x = int(info.get("x", 0))
                 y = int(info.get("y", 0))
@@ -186,6 +204,11 @@ def main():
         "--gui",
         action="store_true",
         help="Abrir interfaz gráfica para controlar posiciones y clics",
+    )
+    parser.add_argument(
+        "--randomize",
+        action="store_true",
+        help="Ejecutar las posiciones en orden aleatorio cada pasada (sin repetición dentro de la pasada)",
     )
     args = parser.parse_args()
 
@@ -411,6 +434,12 @@ def main():
             row=1, column=4, padx=4
         )
 
+        # Orden aleatorio entre posiciones
+        random_order_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl, text="Orden aleatorio", variable=random_order_var).grid(
+            row=1, column=5, padx=8
+        )
+
         log_text = tk.Text(right)
         log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -423,7 +452,22 @@ def main():
             while not stop_event.is_set():
                 if running_flag[0]:
                     now = time.time()
-                    for name, info in list(positions.items()):
+                    # Construir orden de iteración (posiciones habilitadas)
+                    active_names = [
+                        n
+                        for n, info0 in positions.items()
+                        if info0.get("enabled", True)
+                    ]
+                    if not active_names:
+                        time.sleep(0.1)
+                        continue
+                    if bool(random_order_var.get()):
+                        names_iter = list(active_names)
+                        random.shuffle(names_iter)
+                    else:
+                        names_iter = active_names
+                    for name in names_iter:
+                        info = positions.get(name, {})
                         if not info.get("enabled", True):
                             continue
                         x = int(info.get("x", 0))
@@ -567,7 +611,9 @@ def main():
 
     # Start background thread
     t = threading.Thread(
-        target=click_loop, args=(positions, args.interval, simulate), daemon=True
+        target=click_loop,
+        args=(positions, args.interval, simulate, args.randomize, print),
+        daemon=True,
     )
     t.start()
 

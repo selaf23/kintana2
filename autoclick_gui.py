@@ -980,6 +980,12 @@ class AutoclickGUI:
             row=1, column=4, padx=4
         )
 
+        # Orden aleatorio entre posiciones
+        random_order_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(ctrl, text="Orden aleatorio", variable=random_order_var).grid(
+            row=1, column=5, padx=8
+        )
+
         log_text = tk.Text(right)
         log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -1014,7 +1020,22 @@ class AutoclickGUI:
             while not stop_event.is_set():
                 if running_flag[0]:
                     now = time.time()
-                    for name, info in list(positions.items()):
+                    # Construir orden de iteración (posiciones habilitadas)
+                    active_names = [
+                        n
+                        for n, info0 in positions.items()
+                        if info0.get("enabled", True)
+                    ]
+                    if not active_names:
+                        time.sleep(0.1)
+                        continue
+                    if bool(random_order_var.get()):
+                        names_iter = list(active_names)
+                        random.shuffle(names_iter)
+                    else:
+                        names_iter = active_names
+                    for name in names_iter:
+                        info = positions.get(name, {})
                         if not info.get("enabled", True):
                             continue
                         x = int(info.get("x", 0))
