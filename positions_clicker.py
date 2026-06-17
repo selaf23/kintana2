@@ -3,22 +3,25 @@
 Herramienta simple para registrar posiciones de pantalla y hacer clics en ellas.
 
 Flujo:
- 1) Registrar posiciones moviendo el ratón al punto y pulsando Enter.
+ 1) Registrar posiciones moviendo el ratón al punto y pulsando Enter (modo CLI) o
+    usar la GUI para añadir posiciones.
  2) Guardar las posiciones en `targets/positions.json` (opcional).
- 3) Ejecutar el bucle de clics: F6 para iniciar/detener, Esc para salir.
+ 3) Ejecutar el bucle de clics: F6 para iniciar/detener, Esc para salir (modo CLI),
+    o usar los botones Iniciar/Detener en la GUI.
 
 Opciones de seguridad:
  - Por defecto se ejecuta en modo simulado (no hace clics reales).
- - Pasa --real para permitir clics reales (haz una cuenta regresiva antes de empezar).
+ - Pasa --real para permitir clics reales (se muestra cuenta regresiva).
 
 Uso rápido:
-  python positions_clicker.py        # interactivo
-  python positions_clicker.py --real # clicks reales (con confirmación)
+  python positions_clicker.py        # interactivo (CLI)
+  python positions_clicker.py --gui  # GUI para gestionar posiciones y clics
 """
 
 import argparse
 import json
 import os
+import random
 import threading
 import time
 
@@ -27,9 +30,9 @@ from pynput import keyboard
 
 # Optional GUI support
 try:
-    import tkinter as tk
-    from tkinter import simpledialog, messagebox
     import queue
+    import tkinter as tk
+    from tkinter import messagebox
 except Exception:
     tk = None
     queue = None
@@ -60,8 +63,11 @@ def load_positions():
 
 def save_positions(positions: dict):
     ensure_targets_dir()
-    with open(POSITIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(positions, f, indent=2, ensure_ascii=False)
+    try:
+        with open(POSITIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(positions, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[ERROR] No se pudo guardar positions.json: {e}")
 
 
 def record_positions_interactive():
@@ -111,7 +117,9 @@ def on_press(key):
 
 def click_loop(positions_list, global_interval, simulate, log_fn=print):
     global running, clicking, last_click_times
-    log_fn("Hilo de clics iniciado. Presiona F6 (o usa el botón Iniciar) para comenzar/parar, Esc para salir.")
+    log_fn(
+        "Hilo de clics iniciado. Usa el botón Iniciar/Detener o F6 para controlar, Esc para salir (CLI)."
+    )
     while running:
         if clicking:
             now = time.time()
@@ -129,11 +137,13 @@ def click_loop(positions_list, global_interval, simulate, log_fn=print):
                 jx = 0
                 jy = 0
                 if jitter:
-                    jx = pyautogui.random.randint(-jitter, jitter)
-                    jy = pyautogui.random.randint(-jitter, jitter)
+                    jx = random.randint(-jitter, jitter)
+                    jy = random.randint(-jitter, jitter)
                 tx, ty = x + jx, y + jy
                 if simulate:
-                    log_fn(f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)")
+                    log_fn(
+                        f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)"
+                    )
                 else:
                     try:
                         pyautogui.click(tx, ty, button=button)
@@ -170,17 +180,269 @@ def main():
         help="Intervalo por defecto entre pasadas (s)",
     )
     parser.add_argument(
-        "--countdown",
-        type=int,
-        default=3,
-        help="Cuenta regresiva antes de iniciar (s) si --real)",
+        "--countdown", type=int, default=3, help="Cuenta regresiva antes de iniciar (s)"
     )
-+    parser.add_argument("--gui", action="store_true", help="Abrir interfaz gráfica para controlar posiciones y clics")
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Abrir interfaz gráfica para controlar posiciones y clics",
+    )
     args = parser.parse_args()
 
     simulate = not args.real
 
     ensure_targets_dir()
+
+    # Modo GUI
+    if args.gui:
+        if tk is None:
+            print(
+                "Tkinter no está disponible en este entorno; no se puede iniciar la GUI"
+            )
+            return
+
+        positions = {}
+        if os.path.exists(POSITIONS_FILE):
+            # Cargar posiciones existentes sin preguntar para la GUI
+            positions = load_positions()
+
+        log_q = queue.Queue()
+
+        def enqueue_log(s):
+            try:
+                log_q.put(s)
+            except Exception:
+                pass
+
+        def poll_log(text_widget):
+            try:
+                while not log_q.empty():
+                    text_widget.insert("end", log_q.get() + "\n")
+                    text_widget.see("end")
+                text_widget.after(200, lambda: poll_log(text_widget))
+            except Exception:
+                pass
+
+        root = tk.Tk()
+        root.title("Gestor de posiciones — GUI")
+        root.geometry("760x420")
+
+        left = tk.Frame(root)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+        tk.Label(left, text="Posiciones").pack()
+        lb = tk.Listbox(left, width=30, height=20)
+        lb.pack()
+
+        lbl_cursor = tk.Label(left, text="Cursor: (0,0)")
+        lbl_cursor.pack(pady=6)
+
+        def update_cursor():
+            p = pyautogui.position()
+            try:
+                lbl_cursor.config(text=f"Cursor: ({p.x},{p.y})")
+            except Exception:
+                lbl_cursor.config(text="Cursor: (error)")
+            lbl_cursor.after(100, update_cursor)
+
+        update_cursor()
+
+        def populate_list():
+            lb.delete(0, tk.END)
+            for k in positions.keys():
+                lb.insert(tk.END, k)
+
+        def add_current():
+            p = pyautogui.position()
+            name = f"pos_{len(positions) + 1}"
+            positions[name] = {
+                "x": p.x,
+                "y": p.y,
+                "click_cooldown": 1.0,
+                "jitter": 0,
+                "button": "left",
+                "enabled": True,
+            }
+            populate_list()
+            enqueue_log(f"Añadida {name} -> ({p.x},{p.y})")
+
+        frm_manual = tk.Frame(left)
+        frm_manual.pack(pady=6)
+        tk.Label(frm_manual, text="X:").grid(row=0, column=0)
+        ent_x = tk.Entry(frm_manual, width=6)
+        ent_x.grid(row=0, column=1)
+        tk.Label(frm_manual, text="Y:").grid(row=0, column=2)
+        ent_y = tk.Entry(frm_manual, width=6)
+        ent_y.grid(row=0, column=3)
+
+        def add_manual():
+            try:
+                x = int(ent_x.get())
+                y = int(ent_y.get())
+            except Exception:
+                messagebox.showerror("Error", "X e Y deben ser enteros")
+                return
+            name = f"pos_{len(positions) + 1}"
+            positions[name] = {
+                "x": x,
+                "y": y,
+                "click_cooldown": 1.0,
+                "jitter": 0,
+                "button": "left",
+                "enabled": True,
+            }
+            populate_list()
+            enqueue_log(f"Añadida {name} -> ({x},{y})")
+
+        tk.Button(left, text="Agregar posición (cursor)", command=add_current).pack(
+            pady=4
+        )
+        tk.Button(left, text="Agregar manual", command=add_manual).pack(pady=4)
+
+        def remove_selected():
+            sel = lb.curselection()
+            if not sel:
+                return
+            name = lb.get(sel[0])
+            if messagebox.askyesno("Eliminar", f"Eliminar {name}?"):
+                positions.pop(name, None)
+                populate_list()
+                enqueue_log(f"Eliminada {name}")
+
+        tk.Button(left, text="Eliminar seleccionado", command=remove_selected).pack(
+            pady=4
+        )
+
+        def save_positions_ui():
+            save_positions(positions)
+            enqueue_log(f"Guardadas {len(positions)} posiciones")
+
+        tk.Button(left, text="Guardar posiciones", command=save_positions_ui).pack(
+            pady=4
+        )
+
+        right = tk.Frame(root)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        ctrl = tk.Frame(right)
+        ctrl.pack(fill=tk.X)
+        tk.Label(ctrl, text="Intervalo (s):").grid(row=0, column=0)
+        interval_var = tk.DoubleVar(value=args.interval)
+        tk.Entry(ctrl, textvariable=interval_var, width=6).grid(row=0, column=1)
+        sim_var = tk.BooleanVar(value=simulate)
+        tk.Checkbutton(ctrl, text="Simular", variable=sim_var).grid(
+            row=0, column=2, padx=8
+        )
+        tk.Label(ctrl, text="Cuenta regresiva: ").grid(row=1, column=0)
+        count_var = tk.IntVar(value=args.countdown)
+        tk.Entry(ctrl, textvariable=count_var, width=6).grid(row=1, column=1)
+
+        log_text = tk.Text(right)
+        log_text.pack(fill=tk.BOTH, expand=True)
+
+        thread = None
+        stop_event = threading.Event()
+        running_flag = [False]
+
+        def pos_click_loop():
+            last_clicks = {}
+            while not stop_event.is_set():
+                if running_flag[0]:
+                    now = time.time()
+                    for name, info in list(positions.items()):
+                        if not info.get("enabled", True):
+                            continue
+                        x = int(info.get("x", 0))
+                        y = int(info.get("y", 0))
+                        cooldown = float(info.get("click_cooldown", interval_var.get()))
+                        jitter = int(info.get("jitter", 0))
+                        button = info.get("button", "left")
+                        last = last_clicks.get((name, x, y), 0)
+                        if now - last < cooldown:
+                            continue
+                        jx = 0
+                        jy = 0
+                        if jitter:
+                            jx = random.randint(-jitter, jitter)
+                            jy = random.randint(-jitter, jitter)
+                        tx, ty = x + jx, y + jy
+                        if bool(sim_var.get()):
+                            enqueue_log(
+                                f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)"
+                            )
+                        else:
+                            try:
+                                pyautogui.click(tx, ty, button=button)
+                                enqueue_log(
+                                    f"[CLIC] {name} en ({tx},{ty}) (boton={button})"
+                                )
+                            except Exception as e:
+                                enqueue_log(
+                                    f"[ERROR] No se pudo clicar {name} en ({tx},{ty}): {e}"
+                                )
+                        last_clicks[(name, x, y)] = time.time()
+                        time.sleep(float(info.get("click_delay", 0.05)))
+                    time.sleep(float(interval_var.get()))
+                else:
+                    time.sleep(0.1)
+            enqueue_log("Hilo de clics detenido")
+
+        def poll_log_main():
+            try:
+                while not log_q.empty():
+                    log_text.insert("end", log_q.get() + "\n")
+                    log_text.see("end")
+                # También se puede imprimir en consola y/o escribir a fichero
+                root.after(200, poll_log_main)
+            except Exception:
+                pass
+
+        def start_clicking():
+            nonlocal thread
+            if thread and thread.is_alive():
+                enqueue_log("Ya en ejecución")
+                return
+            if not bool(sim_var.get()):
+                enqueue_log(
+                    "ADVERTENCIA: se habilitarán clics reales. Preparando cuenta regresiva..."
+                )
+
+                def do_start_after(n):
+                    if n <= 0:
+                        running_flag[0] = True
+                        stop_event.clear()
+                        thread = threading.Thread(target=pos_click_loop, daemon=True)
+                        thread.start()
+                        enqueue_log("Hilo de clics lanzado")
+                        return
+                    enqueue_log(f"Iniciando en {n}...")
+                    root.after(1000, lambda: do_start_after(n - 1))
+
+                do_start_after(int(count_var.get()))
+            else:
+                running_flag[0] = True
+                stop_event.clear()
+                thread = threading.Thread(target=pos_click_loop, daemon=True)
+                thread.start()
+                enqueue_log("Hilo de clics lanzado")
+
+        def stop_clicking():
+            running_flag[0] = False
+            stop_event.set()
+            enqueue_log("Detenido por usuario")
+
+        tk.Button(ctrl, text="Iniciar", command=start_clicking).grid(
+            row=1, column=2, padx=8
+        )
+        tk.Button(ctrl, text="Detener", command=stop_clicking).grid(
+            row=1, column=3, padx=8
+        )
+
+        populate_list()
+        poll_log_main()
+        root.mainloop()
+        return
+
+    # Modo CLI / interactivo
     positions = {}
     if os.path.exists(POSITIONS_FILE):
         s = input("Se encontró positions.json. ¿Cargarla? [Y/n]: ").strip().lower()
@@ -203,135 +465,30 @@ def main():
     print(f"Posiciones: {positions}")
     print(f"Modo: {'SIMULADO' if simulate else 'REAL'}")
 
-+    # If GUI requested, launch simple Tk window with Start button and log
-+    if args.gui:
-+        if tk is None:
-+            print("Tkinter no está disponible en este entorno; no se puede iniciar la GUI")
-+            return
-+        # Build simple GUI
-+        log_q = queue.Queue()
-+
-+        def enqueue_log(s):
-+            log_q.put(s)
-+
-+        def poll_log(text_widget):
-+            while not log_q.empty():
-+                text_widget.insert("end", log_q.get() + "\n")
-+                text_widget.see("end")
-+            text_widget.after(200, lambda: poll_log(text_widget))
-+
-+        root = tk.Tk()
-+        root.title("Positions Clicker — GUI")
-+        root.geometry("700x400")
-+
-+        left = tk.Frame(root)
-+        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
-+        tk.Label(left, text="Posiciones").pack()
-+        lb = tk.Listbox(left, width=30, height=20)
-+        lb.pack()
-+
-+        def populate_list():
-+            lb.delete(0, tk.END)
-+            for k in positions.keys():
-+                lb.insert(tk.END, k)
-+
-+        def add_current():
-+            pos = pyautogui.position()
-+            name = f"pos_{len(positions)+1}"
-+            positions[name] = {"x": pos.x, "y": pos.y, "click_cooldown": 1.0, "jitter": 0, "button": "left", "enabled": True}
-+            populate_list()
-+            enqueue_log(f"Añadida {name} -> ({pos.x},{pos.y})")
-+
-+        def remove_selected():
-+            sel = lb.curselection()
-+            if not sel:
-+                return
-+            name = lb.get(sel[0])
-+            positions.pop(name, None)
-+            populate_list()
-+            enqueue_log(f"Eliminada {name}")
-+
-+        tk.Button(left, text="Agregar posición (cursor)", command=add_current).pack(pady=4)
-+        tk.Button(left, text="Eliminar seleccionado", command=remove_selected).pack(pady=4)
-+        tk.Button(left, text="Guardar posiciones", command=lambda: (save_positions(positions), enqueue_log(f"Guardadas {len(positions)} posiciones"))).pack(pady=4)
-+
-+        right = tk.Frame(root)
-+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
-+        ctrl = tk.Frame(right)
-+        ctrl.pack(fill=tk.X)
-+        tk.Label(ctrl, text="Intervalo (s):").grid(row=0, column=0)
-+        interval_var = tk.DoubleVar(value=args.interval)
-+        tk.Entry(ctrl, textvariable=interval_var, width=6).grid(row=0, column=1)
-+        sim_var = tk.BooleanVar(value=simulate)
-+        tk.Checkbutton(ctrl, text="Simular", variable=sim_var).grid(row=0, column=2, padx=8)
-+        tk.Label(ctrl, text="Cuenta regresiva: ").grid(row=1, column=0)
-+        count_var = tk.IntVar(value=args.countdown)
-+        tk.Entry(ctrl, textvariable=count_var, width=6).grid(row=1, column=1)
-+
-+        log_text = tk.Text(right)
-+        log_text.pack(fill=tk.BOTH, expand=True)
-+
-+        thread = None
-+
-+        def start_clicking():
-+            nonlocal thread
-+            if thread and thread.is_alive():
-+                enqueue_log("Ya en ejecución")
-+                return
-+            sim = bool(sim_var.get())
-+            interval = float(interval_var.get())
-+            countdown = int(count_var.get())
-+            if not sim:
-+                enqueue_log("ADVERTENCIA: se habilitarán clics reales. Preparando cuenta regresiva...")
-+                for i in range(countdown, 0, -1):
-+                    enqueue_log(f"Iniciando en {i}...")
-+                    time.sleep(1)
-+            global clicking
-+            clicking = True
-+            thread = threading.Thread(target=click_loop, args=(positions, interval, sim, enqueue_log), daemon=True)
-+            thread.start()
-+            enqueue_log("Hilo de clics lanzado")
-+
-+        def stop_clicking():
-+            global clicking
-+            clicking = False
-+            enqueue_log("Detenido por usuario")
-+
-+        tk.Button(ctrl, text="Iniciar", command=start_clicking).grid(row=1, column=2, padx=8)
-+        tk.Button(ctrl, text="Detener", command=stop_clicking).grid(row=1, column=3, padx=8)
-+
-+        populate_list()
-+        poll_log(log_text)
-+        root.mainloop()
-+        return
-+
-     if not simulate:
-         print(
-             "ADVERTENCIA: se habilitarán clics reales. Asegúrate de que el cursor esté en una zona segura."
-         )
-         print(f"Iniciando en {args.countdown} segundos...")
-         time.sleep(args.countdown)
+    if not simulate:
+        print(
+            "ADVERTENCIA: se habilitarán clics reales. Asegúrate de que el cursor esté en una zona segura."
+        )
+        print(f"Iniciando en {args.countdown} segundos...")
+        time.sleep(args.countdown)
 
-     # Start background thread
--    t = threading.Thread(
--        target=click_loop, args=(positions, args.interval, simulate), daemon=True
--    )
-+    t = threading.Thread(
-+        target=click_loop, args=(positions, args.interval, simulate), daemon=True
-+    )
-     t.start()
+    # Start background thread
+    t = threading.Thread(
+        target=click_loop, args=(positions, args.interval, simulate), daemon=True
+    )
+    t.start()
 
-     # Keyboard listener (F6 to toggle, Esc to exit)
-     with keyboard.Listener(on_press=on_press) as listener:
-         if args.auto_start:
-             global clicking
-             clicking = True
-             print("Autostart activado: comenzando a clicar")
-         listener.join()
+    # Keyboard listener (F6 to toggle, Esc to exit)
+    with keyboard.Listener(on_press=on_press) as listener:
+        if args.auto_start:
+            global clicking
+            clicking = True
+            print("Autostart activado: comenzando a clicar")
+        listener.join()
 
-     # Clean shutdown
-     running = False
-     t.join(timeout=1)
+    # Clean shutdown
+    running = False
+    t.join(timeout=1)
 
 
 if __name__ == "__main__":

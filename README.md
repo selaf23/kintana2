@@ -5,10 +5,11 @@ Autoclicker por imagenes — GUI y utilidades
 
 Este repositorio contiene una herramienta para detectar imágenes en pantalla y hacer clic sobre ellas automáticamente. Tiene:
 
-- `autoclick_gui.py` — Interfaz gráfica (Tkinter) para añadir objetivos, configurar opciones por objetivo y controlar el autoclicker.
+- `autoclick_gui.py` — Interfaz gráfica (Tkinter) para añadir objetivos, configurar opciones por objetivo y controlar el autoclicker. Incluye un botón `Posiciones` que abre un gestor de posiciones (ver sección "Posiciones" más abajo).
+- `positions_clicker.py` — Herramienta para registrar/gestionar posiciones y ejecutar clics por coordenadas (tiene modo CLI y GUI independiente).
 - `autoclick_image.py` — Versión headless (sin GUI) para usar desde línea de comandos o empaquetar.
 - `add_target.py` — Helper para copiar imágenes a `targets/` y registrar opciones por objetivo en `targets/config.json`.
-- `build_windows.ps1` — Script PowerShell que ayuda a generar un `.exe` en Windows con PyInstaller.
+- `build_windows.ps1` — Script PowerShell que ayuda a generar un `.exe` en Windows con PyInstaller (local).
 - `run_safe.py` — Runner seguro que simula clics (no mueve el ratón) para pruebas.
 - `.github/workflows/build-binaries.yml` — workflow de GitHub Actions que intenta construir binarios (opcional).
 

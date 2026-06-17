@@ -31,6 +31,7 @@ try:
 except Exception:
     tk = None  # type: ignore
 
+import queue
 import subprocess
 
 import pyautogui
@@ -558,43 +559,276 @@ class AutoclickGUI:
             self.scanner = None
 
     def _open_positions(self):
-        """Abrir el gestor de posiciones en una nueva ventana (usa positions_clicker.py)
-        Si `positions_clicker.start_positions_gui` está disponible lo llama directamente,
-        si no, intenta lanzar un nuevo proceso Python con el script.
-        """
+        """Abrir el gestor de posiciones integrado en la misma aplicación."""
         try:
-            import positions_clicker
-        except Exception:
-            positions_clicker = None
+            self._start_positions_manager()
+        except Exception as e:
+            self._log(f"[ERROR] No se pudo abrir el gestor de posiciones: {e}")
 
-        # Preferir llamar a la función interna si existe (mejor integración)
-        if positions_clicker and hasattr(positions_clicker, "start_positions_gui"):
+    def _start_positions_manager(self):
+        """Inicia una ventana para gestionar posiciones y lanzar clics.
+
+        La ventana permite añadir/eliminar posiciones, guardar en targets/positions.json,
+        iniciar/detener la secuencia de clics y ver un log en tiempo real.
+        """
+        ensure_targets_dir(self.targets_dir)
+        positions_path = os.path.join(self.targets_dir, "positions.json")
+        positions = {}
+        if os.path.exists(positions_path):
             try:
-                positions_clicker.start_positions_gui(
-                    positions=None,
-                    interval=float(self.scan_interval_var.get()),
-                    simulate=bool(self.simulate_var.get()),
-                    countdown=int(self.countdown_var.get()),
-                    targets_dir=self.targets_dir,
-                    parent=self.root,
-                )
+                with open(positions_path, "r", encoding="utf-8") as f:
+                    positions = json.load(f)
+            except Exception:
+                positions = {}
+
+        if tk is None:
+            messagebox.showerror(
+                "Error",
+                "Tkinter no está disponible: no se puede abrir gestor de posiciones",
+            )
+            self._log(
+                "[ERROR] Tkinter no está disponible: no se puede abrir gestor de posiciones"
+            )
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Gestor de posiciones")
+        win.geometry("760x420")
+
+        left = tk.Frame(win)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+        tk.Label(left, text="Posiciones").pack()
+        lb = tk.Listbox(left, width=30, height=20)
+        lb.pack()
+
+        lbl_cursor = tk.Label(left, text="Cursor: (0,0)")
+        lbl_cursor.pack(pady=6)
+
+        def update_cursor():
+            try:
+                p = pyautogui.position()
+                lbl_cursor.config(text=f"Cursor: ({p.x},{p.y})")
+            except Exception:
+                lbl_cursor.config(text="Cursor: (error)")
+            lbl_cursor.after(100, update_cursor)
+
+        update_cursor()
+
+        def populate_list():
+            lb.delete(0, tk.END)
+            for k in positions.keys():
+                lb.insert(tk.END, k)
+
+        def add_current():
+            p = pyautogui.position()
+            name = f"pos_{len(positions) + 1}"
+            positions[name] = {
+                "x": p.x,
+                "y": p.y,
+                "click_cooldown": 1.0,
+                "jitter": 0,
+                "button": "left",
+                "enabled": True,
+            }
+            populate_list()
+            self._log(f"Añadida {name} -> ({p.x},{p.y})")
+
+        frm_manual = tk.Frame(left)
+        frm_manual.pack(pady=6)
+        tk.Label(frm_manual, text="X:").grid(row=0, column=0)
+        ent_x = tk.Entry(frm_manual, width=6)
+        ent_x.grid(row=0, column=1)
+        tk.Label(frm_manual, text="Y:").grid(row=0, column=2)
+        ent_y = tk.Entry(frm_manual, width=6)
+        ent_y.grid(row=0, column=3)
+
+        def add_manual():
+            try:
+                x = int(ent_x.get())
+                y = int(ent_y.get())
+            except Exception:
+                messagebox.showerror("Error", "X e Y deben ser enteros")
                 return
+            name = f"pos_{len(positions) + 1}"
+            positions[name] = {
+                "x": x,
+                "y": y,
+                "click_cooldown": 1.0,
+                "jitter": 0,
+                "button": "left",
+                "enabled": True,
+            }
+            populate_list()
+            self._log(f"Añadida {name} -> ({x},{y})")
+
+        tk.Button(left, text="Agregar manual", command=add_manual).pack(pady=4)
+        tk.Button(left, text="Agregar posición (cursor)", command=add_current).pack(
+            pady=4
+        )
+
+        def remove_selected():
+            sel = lb.curselection()
+            if not sel:
+                return
+            name = lb.get(sel[0])
+            if not messagebox.askyesno("Eliminar", f"Eliminar {name} de la lista?"):
+                return
+            positions.pop(name, None)
+            populate_list()
+            self._log(f"Eliminada {name}")
+
+        tk.Button(left, text="Eliminar seleccionado", command=remove_selected).pack(
+            pady=4
+        )
+
+        def save_positions_local(pos):
+            try:
+                with open(positions_path, "w", encoding="utf-8") as f:
+                    json.dump(pos, f, indent=2, ensure_ascii=False)
+                self._log(f"Guardadas {len(pos)} posiciones en positions.json")
+                messagebox.showinfo("Guardado", f"Guardadas {len(pos)} posiciones")
             except Exception as e:
-                # si falla, caeremos al fallback de subprocess
-                self._log(
-                    f"[AVISO] start_positions_gui falló: {e}; intentamos lanzar proceso externo"
+                self._log(f"[ERROR] No se pudo guardar positions.json: {e}")
+                messagebox.showerror("Error", f"No se pudo guardar: {e}")
+
+        tk.Button(
+            left,
+            text="Guardar posiciones",
+            command=lambda: save_positions_local(positions),
+        ).pack(pady=4)
+
+        right = tk.Frame(win)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        ctrl = tk.Frame(right)
+        ctrl.pack(fill=tk.X)
+        tk.Label(ctrl, text="Intervalo (s):").grid(row=0, column=0)
+        interval_var = tk.DoubleVar(value=float(self.scan_interval_var.get()))
+        tk.Entry(ctrl, textvariable=interval_var, width=6).grid(row=0, column=1)
+        sim_var = tk.BooleanVar(value=bool(self.simulate_var.get()))
+        tk.Checkbutton(ctrl, text="Simular", variable=sim_var).grid(
+            row=0, column=2, padx=8
+        )
+        tk.Label(ctrl, text="Cuenta regresiva: ").grid(row=1, column=0)
+        count_var = tk.IntVar(value=int(self.countdown_var.get()))
+        tk.Entry(ctrl, textvariable=count_var, width=6).grid(row=1, column=1)
+
+        log_text = tk.Text(right)
+        log_text.pack(fill=tk.BOTH, expand=True)
+
+        # Usar una cola para pasar logs desde hilos al hilo de la GUI
+        log_q = queue.Queue()
+
+        def enqueue_log(s):
+            try:
+                log_q.put(s)
+            except Exception:
+                pass
+
+        def poll_log_main():
+            try:
+                while not log_q.empty():
+                    msg = log_q.get()
+                    log_text.insert(tk.END, msg + "\n")
+                    log_text.see(tk.END)
+                    # también logear en la ventana principal
+                    self._log(msg)
+            except Exception:
+                pass
+            finally:
+                win.after(200, poll_log_main)
+
+        thread = None
+        stop_event = threading.Event()
+        running_flag = [False]
+
+        def pos_click_loop():
+            last_clicks = {}
+            while not stop_event.is_set():
+                if running_flag[0]:
+                    now = time.time()
+                    for name, info in list(positions.items()):
+                        if not info.get("enabled", True):
+                            continue
+                        x = int(info.get("x", 0))
+                        y = int(info.get("y", 0))
+                        cooldown = float(info.get("click_cooldown", interval_var.get()))
+                        jitter = int(info.get("jitter", 0))
+                        button = info.get("button", "left")
+                        last = last_clicks.get((name, x, y), 0)
+                        if now - last < cooldown:
+                            continue
+                        jx = 0
+                        jy = 0
+                        if jitter:
+                            jx = random.randint(-jitter, jitter)
+                            jy = random.randint(-jitter, jitter)
+                        tx, ty = x + jx, y + jy
+                        if bool(sim_var.get()):
+                            enqueue_log(
+                                f"[SIMULADO] CLIC {name} en ({tx},{ty}) (cooldown={cooldown}s)"
+                            )
+                        else:
+                            try:
+                                pyautogui.click(tx, ty, button=button)
+                                enqueue_log(
+                                    f"[CLIC] {name} en ({tx},{ty}) (boton={button})"
+                                )
+                            except Exception as e:
+                                enqueue_log(
+                                    f"[ERROR] No se pudo clicar {name} en ({tx},{ty}): {e}"
+                                )
+                        last_clicks[(name, x, y)] = time.time()
+                        time.sleep(float(info.get("click_delay", 0.05)))
+                    time.sleep(float(interval_var.get()))
+                else:
+                    time.sleep(0.1)
+            enqueue_log("Hilo de clics detenido")
+
+        def start_clicking():
+            nonlocal thread
+            if thread and thread.is_alive():
+                enqueue_log("Ya en ejecución")
+                return
+            if not bool(sim_var.get()):
+                enqueue_log(
+                    "ADVERTENCIA: se habilitarán clics reales. Preparando cuenta regresiva..."
                 )
 
-        # Fallback: ejecutar el script como proceso separado
-        script_path = os.path.join(exe_dir(), "positions_clicker.py")
-        if os.path.exists(script_path):
-            try:
-                subprocess.Popen([sys.executable, script_path, "--gui"])
-                self._log(f"Lanzado gestor de posiciones: {script_path}")
-            except Exception as e:
-                self._log(f"[ERROR] No se pudo lanzar gestor de posiciones: {e}")
-        else:
-            self._log("[ERROR] positions_clicker.py no encontrado en el paquete")
+                def do_start_after(n):
+                    nonlocal thread
+                    if n <= 0:
+                        running_flag[0] = True
+                        stop_event.clear()
+                        thread = threading.Thread(target=pos_click_loop, daemon=True)
+                        thread.start()
+                        enqueue_log("Hilo de clics lanzado")
+                        return
+                    enqueue_log(f"Iniciando en {n}...")
+                    win.after(1000, lambda: do_start_after(n - 1))
+
+                do_start_after(int(count_var.get()))
+            else:
+                running_flag[0] = True
+                stop_event.clear()
+                thread = threading.Thread(target=pos_click_loop, daemon=True)
+                thread.start()
+                enqueue_log("Hilo de clics lanzado")
+
+        def stop_clicking():
+            running_flag[0] = False
+            stop_event.set()
+            enqueue_log("Detenido por usuario")
+
+        tk.Button(ctrl, text="Iniciar", command=start_clicking).grid(
+            row=1, column=2, padx=8
+        )
+        tk.Button(ctrl, text="Detener", command=stop_clicking).grid(
+            row=1, column=3, padx=8
+        )
+
+        populate_list()
+        poll_log_main()
 
     def _on_close(self):
         if self.scanner and self.scanner.running:
