@@ -855,6 +855,57 @@ class AutoclickGUI:
             pady=4
         )
 
+        # Grabación con la tecla 's' (global si pynput está disponible, local si no)
+        recording_state = {"enabled": False, "listener": None}
+        lbl_record = tk.Label(left, text="Grabación S: OFF")
+        lbl_record.pack(pady=4)
+
+        def toggle_recording_mode():
+            if recording_state["enabled"]:
+                # Detener grabación
+                recording_state["enabled"] = False
+                try:
+                    if recording_state.get("listener"):
+                        recording_state["listener"].stop()
+                        recording_state["listener"] = None
+                except Exception:
+                    pass
+                try:
+                    win.unbind("<KeyPress-s>")
+                except Exception:
+                    pass
+                toggle_btn.config(text="Grabar con S")
+                lbl_record.config(text="Grabación S: OFF")
+                enqueue_log("[INFO] Grabación con S detenida")
+            else:
+                # Iniciar grabación
+                recording_state["enabled"] = True
+                if pkb is not None:
+
+                    def on_press_rec(key):
+                        try:
+                            if getattr(key, "char", None) and key.char.lower() == "s":
+                                # Agregar posición en el hilo de la GUI
+                                self.root.after(0, add_current)
+                        except Exception:
+                            pass
+
+                    rec_listener = pkb.Listener(on_press=on_press_rec)
+                    rec_listener.daemon = True
+                    rec_listener.start()
+                    recording_state["listener"] = rec_listener
+                else:
+                    # Fallback: binding local cuando la ventana tiene foco
+                    win.bind("<KeyPress-s>", lambda e: add_current())
+                toggle_btn.config(text="Detener grabación")
+                lbl_record.config(text="Grabación S: ON")
+                enqueue_log(
+                    "[INFO] Grabación con S iniciada: presiona 's' para grabar posiciones"
+                )
+
+        toggle_btn = tk.Button(left, text="Grabar con S", command=toggle_recording_mode)
+        toggle_btn.pack(pady=4)
+
         def remove_selected():
             sel = lb.curselection()
             if not sel:
@@ -1083,6 +1134,17 @@ class AutoclickGUI:
             win.mainloop()
         finally:
             try:
+                # Si quedó un listener de grabación activo, detenerlo
+                try:
+                    if "recording_state" in locals() and recording_state.get(
+                        "listener"
+                    ):
+                        try:
+                            recording_state["listener"].stop()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 self._positions_win = None
             except Exception:
                 pass

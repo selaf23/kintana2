@@ -298,6 +298,54 @@ def main():
         )
         tk.Button(left, text="Agregar manual", command=add_manual).pack(pady=4)
 
+        # Grabación con la tecla 's' (global si pynput está disponible, local si no)
+        recording_state = {"enabled": False, "listener": None}
+        lbl_record = tk.Label(left, text="Grabación S: OFF")
+        lbl_record.pack(pady=4)
+
+        def toggle_recording_mode():
+            if recording_state["enabled"]:
+                recording_state["enabled"] = False
+                try:
+                    if recording_state.get("listener"):
+                        recording_state["listener"].stop()
+                        recording_state["listener"] = None
+                except Exception:
+                    pass
+                try:
+                    root.unbind("<KeyPress-s>")
+                except Exception:
+                    pass
+                btn_record.config(text="Grabar con S")
+                lbl_record.config(text="Grabación S: OFF")
+                enqueue_log("[INFO] Grabación con S detenida")
+            else:
+                recording_state["enabled"] = True
+                try:
+                    # listener global
+                    def on_press_rec(key):
+                        try:
+                            if getattr(key, "char", None) and key.char.lower() == "s":
+                                root.after(0, add_current)
+                        except Exception:
+                            pass
+
+                    rec_listener = keyboard.Listener(on_press=on_press_rec)
+                    rec_listener.daemon = True
+                    rec_listener.start()
+                    recording_state["listener"] = rec_listener
+                except Exception:
+                    # fallback local binding
+                    root.bind("<KeyPress-s>", lambda e: add_current())
+                btn_record.config(text="Detener grabación")
+                lbl_record.config(text="Grabación S: ON")
+                enqueue_log(
+                    "[INFO] Grabación con S iniciada: presiona 's' para grabar posiciones"
+                )
+
+        btn_record = tk.Button(left, text="Grabar con S", command=toggle_recording_mode)
+        btn_record.pack(pady=4)
+
         def remove_selected():
             sel = lb.curselection()
             if not sel:
@@ -474,7 +522,17 @@ def main():
 
         populate_list()
         poll_log_main()
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            try:
+                if "recording_state" in locals() and recording_state.get("listener"):
+                    try:
+                        recording_state["listener"].stop()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         return
 
     # Modo CLI / interactivo
